@@ -313,6 +313,7 @@ Into #OHSMSFinal
 
   */ 
 --------------------------------------------------------------------------
+
 Drop table if exists #SFMCSMStotals
 select
 sms.LoanNumber
@@ -320,12 +321,14 @@ sms.LoanNumber
 , SUM(case when sms.InBound = 'True' then 1 else 0 end) as InBoundTotal
 , SUM(case when sms.InBound = 'True' and  sms.MessageText not in ('Help', 'Stop') then 1 else 0 end) as InBound_exclusion_Total
 , SUM(case when sms.Outbound= 'True' then 1 else 0 end) as OutboundTotal
--- case when datekey < allocation date or allication date is null then 1 else 0 as pre-allocate texting flag
+, Case when SUM(case when se.OptOutStatusID = 1 then 1 else 0 end) > 0 then 1 else 0 end as SFMC_text_opt_out
 
 
 into #SFMCSMStotals
 from SRC.SFMC.SmsMessageTrackingExtractView sms
 inner join #finalbase f on sms.LoanNumber = f.Loannumber
+left join SRC.SFMC.SmsSubscriptionExtractView se on se.PEID = sms.PEID
+
 
 where 1=1
 and sms.Delivered = 'True'
@@ -338,8 +341,6 @@ group by
  order by 
   sms.LoanNumber
  , case when sms.DateKey < f.AllocationDate or f.AllocationDate is null then 1 else 0 end
-
- select top 100 * from SRC.SFMC.SmsMessageTrackingExtractView
 
 
 ----------------------------------------
@@ -416,6 +417,7 @@ SELECT
 , sum(s.inboundtotal) as SFMCTotalInbound
 , sum(s.InBound_exclusion_Total) as SFMCTotalInboundwithexclusion
 , sum(s.outboundtotal) as SFMCTotaloutbound
+, sum(s.SFMC_text_opt_out) as SFMCTotalOptOut
 
 , sum(ohsms.outbound) as OHTotalOutBound
 , sum(ohsms.inbound) as OHTotalInbound
@@ -425,8 +427,8 @@ SELECT
 , sum(case when s.InboundTotal > 0 then 1 else 0 end) as Response_flag
 , sum(case when s.InBound_exclusion_Total > 0 then 1 else 0 end) as Response_flag_with_exclusions
 --, sum(case when s.InBoundTotal > 0 and l.allocationdate is not null then 1 else 0 end) as AllocationfromTextTotal
-, Avg(DATEDIFF(day, l.allocationdate, si.Min_Inbound_Date)) as Allocation_inbound_date_diff
-, Avg(DATEDIFF(day, so.Min_Outbound_Date, si.Min_Inbound_Date)) as Outbound_inbound_date_diff
+, Avg(DATEDIFF(MINUTE, l.allocationdate, si.Min_Inbound_Date)) as Allocation_inbound_date_diff
+, Avg(DATEDIFF(Minute, so.Min_Outbound_Date, si.Min_Inbound_Date)) as Outbound_inbound_date_diff
 , getdate() as RefreshDate
 
 
