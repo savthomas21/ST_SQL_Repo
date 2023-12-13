@@ -176,6 +176,77 @@ group by b.loannumber
 
 --------------------------------------------------------------------------
 
+Drop table if exists #SFMCSMStotals
+select
+sms.LoanNumber
+, case when sms.DateKey < f.AllocationDate or f.AllocationDate is null then 1 else 0 end as SFMCPreAllocationTextingFlag
+, SUM(case when sms.InBound = 'True' then 1 else 0 end) as InBoundTotal
+, SUM(case when sms.MessageText in ('Text', 'TEXT') then 1 else 0 end) as TextInboundTotal
+, SUM(case when sms.InBound = 'True' and  sms.MessageText not in ('Help', 'Stop') then 1 else 0 end) as InBound_exclusion_Total
+, SUM(case when sms.Outbound= 'True' then 1 else 0 end) as OutboundTotal
+, Case when SUM(case when se.OptOutStatusID = 1 then 1 else 0 end) > 0 then 1 else 0 end as SFMC_text_opt_out
+
+
+into #SFMCSMStotals
+from SRC.SFMC.SmsMessageTrackingExtractView sms
+inner join #finalbase f on sms.LoanNumber = f.Loannumber
+left join SRC.SFMC.SmsSubscriptionExtractView se on se.PEID = sms.PEID
+
+
+where 1=1
+and sms.Delivered = 'True'
+and sms.datekey between '2023-11-10' and cast( (getdate() + 1) as date)
+--and sms.datekey between @Startdate and @enddate
+group by
+ sms.LoanNumber
+ , case when sms.DateKey < f.AllocationDate or f.AllocationDate is null then 1 else 0 end
+
+ order by 
+  sms.LoanNumber
+ , case when sms.DateKey < f.AllocationDate or f.AllocationDate is null then 1 else 0 end
+
+----------------------------------------
+
+Drop table if exists #SFMCSMSInbound
+select
+sms.LoanNumber
+,min(datekey) as Min_Inbound_Date
+
+into #SFMCSMSInbound
+from SRC.SFMC.SmsMessageTrackingExtractView sms
+inner join #finalbase f on sms.LoanNumber = f.Loannumber
+
+
+where 1=1
+and sms.Delivered = 'True'
+and sms.datekey between '2023-11-10' and cast( getdate() as date)
+and sms.InBound = 'True' and  sms.MessageText not in ('Help', 'Stop') 
+--and sms.datekey between @Startdate and @enddate
+
+group by sms.loannumber
+
+--------------------------------------------------
+
+Drop table if exists #SFMCSMSOutbound
+select
+sms.LoanNumber
+,min(datekey) as Min_Outbound_Date
+
+into #SFMCSMSOutbound
+from SRC.SFMC.SmsMessageTrackingExtractView sms
+inner join #finalbase f on sms.LoanNumber = f.Loannumber
+
+
+where 1=1
+and sms.Delivered = 'True'
+and sms.datekey between '2023-11-10' and cast( getdate() as date)
+and sms.OutBound = 'True'
+--and sms.datekey between @Startdate and @enddate
+
+group by sms.loannumber
+
+--------------------------------------------------------------------------
+
 Drop Table If Exists #OHSMSStart, #OHSMSMiddle, #OHSMSFinal, #OHSMSnext, #ohsmsnextnext
 
 select m.*
@@ -280,7 +351,7 @@ WHERE 1=1
  
  , case when oh.OHSMSPreAllocation = 0 and oh.Outbound = 1 then row_number()OVER(Partition By oh.loannumber order by oh.entrytime asc) 
                             Else Null 
-                                End ResponseTime
+                                End ResponseTimeRn
 
   Into #OHSMSnextnext
 
@@ -288,9 +359,11 @@ WHERE 1=1
 
   
   Select *
-  , case when ResponseTime = 1 then datediff(second, ohf.allocationdttime, ohf.entrytime) * 1.00
+  , case when ResponseTimeRn = 1 then datediff(second, ohf.allocationdttime, ohf.entrytime) * 1.00
                                 Else null
-                                    End FirstOutboundPostAllocation
+                                    End FirstOutboundPostAllocationDatediff
+
+, case when ResponseTimeRn = 1 then ohf.entrytime else NULL end as FirstOutboundPostAllocationDatetime
 
 
 Into #OHSMSFinal
@@ -298,7 +371,7 @@ Into #OHSMSFinal
 
   select *
   from #OHSMSFinal
-
+   
 
   /* 
   
@@ -312,77 +385,6 @@ Into #OHSMSFinal
   -- Additionally, we will want to use date filters to figure out our closes text after allocation or assignment.
 
   */ 
---------------------------------------------------------------------------
-
-Drop table if exists #SFMCSMStotals
-select
-sms.LoanNumber
-, case when sms.DateKey < f.AllocationDate or f.AllocationDate is null then 1 else 0 end as SFMCPreAllocationTextingFlag
-, SUM(case when sms.InBound = 'True' then 1 else 0 end) as InBoundTotal
-, SUM(case when sms.InBound = 'True' and  sms.MessageText not in ('Help', 'Stop') then 1 else 0 end) as InBound_exclusion_Total
-, SUM(case when sms.Outbound= 'True' then 1 else 0 end) as OutboundTotal
-, Case when SUM(case when se.OptOutStatusID = 1 then 1 else 0 end) > 0 then 1 else 0 end as SFMC_text_opt_out
-
-
-into #SFMCSMStotals
-from SRC.SFMC.SmsMessageTrackingExtractView sms
-inner join #finalbase f on sms.LoanNumber = f.Loannumber
-left join SRC.SFMC.SmsSubscriptionExtractView se on se.PEID = sms.PEID
-
-
-where 1=1
-and sms.Delivered = 'True'
-and sms.datekey between '2023-11-10' and cast( (getdate() + 1) as date)
---and sms.datekey between @Startdate and @enddate
-group by
- sms.LoanNumber
- , case when sms.DateKey < f.AllocationDate or f.AllocationDate is null then 1 else 0 end
-
- order by 
-  sms.LoanNumber
- , case when sms.DateKey < f.AllocationDate or f.AllocationDate is null then 1 else 0 end
-
-
-----------------------------------------
-
-Drop table if exists #SFMCSMSInbound
-select
-sms.LoanNumber
-,min(datekey) as Min_Inbound_Date
-
-into #SFMCSMSInbound
-from SRC.SFMC.SmsMessageTrackingExtractView sms
-inner join #finalbase f on sms.LoanNumber = f.Loannumber
-
-
-where 1=1
-and sms.Delivered = 'True'
-and sms.datekey between '2023-11-10' and cast( getdate() as date)
-and sms.InBound = 'True' and  sms.MessageText not in ('Help', 'Stop') 
---and sms.datekey between @Startdate and @enddate
-
-group by sms.loannumber
-
---------------------------------------------------
-
-Drop table if exists #SFMCSMSOutbound
-select
-sms.LoanNumber
-,min(datekey) as Min_Outbound_Date
-
-into #SFMCSMSOutbound
-from SRC.SFMC.SmsMessageTrackingExtractView sms
-inner join #finalbase f on sms.LoanNumber = f.Loannumber
-
-
-where 1=1
-and sms.Delivered = 'True'
-and sms.datekey between '2023-11-10' and cast( getdate() as date)
-and sms.OutBound = 'True'
---and sms.datekey between @Startdate and @enddate
-
-group by sms.loannumber
-
 
 --------------------------------------------------------------------------
 --------------------------------------------------------------------------
@@ -392,7 +394,7 @@ group by sms.loannumber
 DROP TABLE if exists bisandboxwrite.dbo.sthom_texting_metrics
 SELECT
  l.LeadSubmittedDate as LeadCreateDate
-, case when l.LeadSubmittedDate >= '2023-12-14' then 1 else 0 end as [Pilot Launch Date Flag]
+, case when l.LeadSubmittedDate >= '2023-12-15' then 1 else 0 end as [Pilot Launch Date Flag]
 , l.OpportunityGroup as [Opportunity Group]
 , l.leadAge as [Lead Age]
 , dd.[Month And Year Name] as [Lead Create Month]
@@ -415,6 +417,7 @@ SELECT
 , sum(c.AnswerPhoneFlag) as AnsweredPhoneSum
 , sum(TotalCalls.TotalCalls) as TotalCalls
 , sum(s.inboundtotal) as SFMCTotalInbound
+, sum(s.TextInboundTotal) as SFMCTextInbound
 , sum(s.InBound_exclusion_Total) as SFMCTotalInboundwithexclusion
 , sum(s.outboundtotal) as SFMCTotaloutbound
 , sum(s.SFMC_text_opt_out) as SFMCTotalOptOut
@@ -422,13 +425,15 @@ SELECT
 , sum(ohsms.outbound) as OHTotalOutBound
 , sum(ohsms.inbound) as OHTotalInbound
 , Sum(ohsms.[Opt Out]) as OHSMSTotalOptOut
-, AVG(ohsms.FirstOutboundPostAllocation / 60 ) as MinBetweenAllocationandBankerText
+, AVG(ohsms.FirstOutboundPostAllocationDatediff / 60 ) as MinBetweenAllocationandBankerText
 
 , sum(case when s.InboundTotal > 0 then 1 else 0 end) as Response_flag
 , sum(case when s.InBound_exclusion_Total > 0 then 1 else 0 end) as Response_flag_with_exclusions
 --, sum(case when s.InBoundTotal > 0 and l.allocationdate is not null then 1 else 0 end) as AllocationfromTextTotal
-, Avg(DATEDIFF(MINUTE, l.allocationdate, si.Min_Inbound_Date)) as Allocation_inbound_date_diff
+, Avg(DATEDIFF(MINUTE, l.allocationdate, si.Min_Inbound_Date)) as Allocation_to_inbound_date_diff
 , Avg(DATEDIFF(Minute, so.Min_Outbound_Date, si.Min_Inbound_Date)) as Outbound_inbound_date_diff
+
+, AVG(Datediff(minute, ohsms.FirstOutboundPostAllocationDatetime, si.Min_Inbound_Date)) as FirstSMFCInboundTexttoBankerOutboud
 , getdate() as RefreshDate
 
 
