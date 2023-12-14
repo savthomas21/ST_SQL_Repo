@@ -1,6 +1,6 @@
 
 
-Declare @Startdate date = '2023-11-10'
+Declare @Startdate date = '2023-12-12'
 DECLARE @enddate date = cast( getdate() as date)
 
 
@@ -145,6 +145,7 @@ outer apply(
             and m.GroupName = 'Killed'
             order by m.EventDateTime asc
             )Killed
+
 --------------------------------------------------------------------------
 --------------------------------------------------------------------------
 --Get all calls for test and control groups
@@ -173,6 +174,7 @@ from #calls b
 
 
 group by b.loannumber
+
 
 --------------------------------------------------------------------------
 
@@ -369,23 +371,6 @@ WHERE 1=1
 Into #OHSMSFinal
   from #OHSMSnextnext ohf
 
-  select *
-  from #OHSMSFinal
-   
-
-  /* 
-  
-  End of OH SMS Metrics 
-  
-
-  - add distinct client count
-  -- We don't have transfer data, so we will need to figure out a good way to measure that
-  -- Ask shivni about transfer data and the best way to join SFMC with OH messaging
-  -- We will want to use the 'loantextorder' metric to see if we had been texting the client prior to this initiative 
-  -- Additionally, we will want to use date filters to figure out our closes text after allocation or assignment.
-
-  */ 
-
 --------------------------------------------------------------------------
 --------------------------------------------------------------------------
 --aggregate metrics
@@ -422,20 +407,19 @@ SELECT
 , sum(s.outboundtotal) as SFMCTotaloutbound
 , sum(s.SFMC_text_opt_out) as SFMCTotalOptOut
 
-, sum(ohsms.outbound) as OHTotalOutBound
-, sum(ohsms.inbound) as OHTotalInbound
-, Sum(ohsms.[Opt Out]) as OHSMSTotalOptOut
-, AVG(ohsms.FirstOutboundPostAllocationDatediff / 60 ) as MinBetweenAllocationandBankerText
-
 , sum(case when s.InboundTotal > 0 then 1 else 0 end) as Response_flag
 , sum(case when s.InBound_exclusion_Total > 0 then 1 else 0 end) as Response_flag_with_exclusions
---, sum(case when s.InBoundTotal > 0 and l.allocationdate is not null then 1 else 0 end) as AllocationfromTextTotal
+, sum(case when s.InBoundTotal > 0 and l.allocationdate is not null then 1 else 0 end) as AllocationfromTextTotal
 , Avg(DATEDIFF(MINUTE, l.allocationdate, si.Min_Inbound_Date)) as Allocation_to_inbound_date_diff
 , Avg(DATEDIFF(Minute, so.Min_Outbound_Date, si.Min_Inbound_Date)) as Outbound_inbound_date_diff
 
-, AVG(Datediff(minute, ohsms.FirstOutboundPostAllocationDatetime, si.Min_Inbound_Date)) as FirstSMFCInboundTexttoBankerOutboud
-, getdate() as RefreshDate
+, OurHouse.OHTotalOutBound
+, OurHouse.OHTotalInbound
+, OurHouse.OHSMSTotalOptOut
+, Ourhouse.MinBetweenAllocationandBankerText
+, Ourhouse.FirstSMFCInboundTexttoBankerOutboud
 
+, getdate() as RefreshDate
 
 --into #finalbase2
 into bisandboxwrite.dbo.sthom_texting_metrics
@@ -445,7 +429,6 @@ left join #calls2 c on c.LoanNumber = l.LoanNumber
 left join #SFMCSMStotals s on s.LoanNumber = l.LoanNumber
 left join #SFMCSMSInbound si on si.LoanNumber = l.LoanNumber
 left join #SFMCSMSOutbound so on so.LoanNumber = l.LoanNumber
-left join #OHSMSFinal ohsms on ohsms.loannumber = l.LoanNumber
 
 outer apply(
             select
@@ -454,6 +437,20 @@ outer apply(
             where 1=1
             and d.LoanNUmber = l.LoanNumber
             )TotalCalls
+
+Outer Apply(
+		Select 
+		 sum(ohsms.outbound) as OHTotalOutBound
+		, sum(ohsms.inbound) as OHTotalInbound
+		, Sum(ohsms.[Opt Out]) as OHSMSTotalOptOut
+		, AVG(ohsms.FirstOutboundPostAllocationDatediff / 60 ) as MinBetweenAllocationandBankerText
+		, AVG(Datediff(minute, ohsms.FirstOutboundPostAllocationDatetime, si.Min_Inbound_Date)) as FirstSMFCInboundTexttoBankerOutboud
+ 
+		From #OHSMSFinal ohsms 
+		left join #SFMCSMSInbound si on si.LoanNumber = l.LoanNumber
+		where 1=1
+		and  ohsms.loannumber = l.LoanNumber
+			)OurHouse
 
 
 group by
@@ -469,9 +466,13 @@ l.LeadSubmittedDate
 , dd.[Business Day Flag] 
 , s.SFMCPreAllocationTextingFlag
 , c.TransferredFlag
+, OurHouse.OHTotalOutBound
+, OurHouse.OHTotalInbound
+, OurHouse.OHSMSTotalOptOut
+, Ourhouse.MinBetweenAllocationandBankerText
+, Ourhouse.FirstSMFCInboundTexttoBankerOutboud
 
 
-select top 100 * from bisandboxwrite.dbo.sthom_texting_metrics
 
 --------------------------------------------------------------------------
 --------------------------------------------------------------------------
