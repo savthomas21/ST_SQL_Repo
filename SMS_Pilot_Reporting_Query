@@ -1,6 +1,6 @@
 
 
-Declare @Startdate date = '2023-12-12'
+Declare @Startdate date = '2023-11-10'
 DECLARE @enddate date = cast( getdate() as date)
 
 
