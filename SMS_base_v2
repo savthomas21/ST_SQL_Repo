@@ -42,7 +42,7 @@ where 1=1
 DROP TABLE IF EXISTS #SFMCTEmpOutbound
 Select s.*
 , OpportunityGroup
-, datediff(day,LeadSubmittedDate,actiondatetime) as Leadage
+, datediff(day,LeadSubmittedDate, dateadd(hour, 1, s.ActionDateTime)) as Leadage
 , AllocationDate as FirstallocationDate
 
 INTO #SFMCTempOutbound
@@ -51,13 +51,12 @@ from SRC.SFMC.SmsMessageTrackingExtractView s
     INNER JOIN #textbase TB ON TB.LoanNumber = s.LoanNumber 
 
 where 1=1
-and s.ActionDateTime <= tb.AllocationDate --- pre-allocate texts only
-and ActionDateTime >= '2023-12-15' --- only look at texts sent after pilot start date
-and datediff(day,LeadSubmittedDate, actiondatetime) = 1
+and dateadd(hour, 1, s.ActionDateTime) <= tb.AllocationDate --- pre-allocate texts only
+and dateadd(hour, 1 , s.ActionDateTime) >= '2023-12-15' --- only look at texts sent after pilot start date
+and datediff(day,LeadSubmittedDate, dateadd(hour, 1, s.ActionDateTime)) = 1
 and MessageText like '%Rocket Mortgage: Phone calls not your thing? Respond TEXT to start chatting with a home loan expert. Reply HELP for help, STOP to end text.%'
 
 CREATE NONCLUSTERED INDEX I_XD ON #SFMCTempoutbound (loannumber, Mobile)
-
 
 -----------------------------------------------------------------------------------
 
@@ -72,7 +71,7 @@ where
 --cast(actiondatetime as date) >= @Startdate
 --and 
 inbound = 'true'
-and ActionDateTime >= '2023-12-15' --- only look at texts received after pilot start date
+and dateadd(hour, 1, s.ActionDateTime) >= '2023-12-15' --- only look at texts received after pilot start date
 and MessageText not in ('WEBLEAD')
 
 
@@ -91,7 +90,7 @@ loannumber
 INTO #InboundPrebase
 
 from #SFMCTempoutbound
-where ActionDateTime >= '2023-12-15'
+where dateadd(hour, 1, ActionDateTime) >= '2023-12-15'
 -----------------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS #PEIDBASE1
@@ -132,7 +131,7 @@ into #PEIDBASE
 OUTER APPLY(
     Select top 1
 	 IPB.Mobile
-	, sms.ActionDateTime as min_inbound_Date
+	, dateadd(hour, 1, sms.ActionDateTime) as min_inbound_Date
     from #inboundprebase IPB
 	left join #SFMCTEmpInbound sms on sms.mobile = IPB.Mobile
 
@@ -188,7 +187,7 @@ Select IP.*
 INTO #InboundFinal
 
 from #PEIDBAse IP
-	LEFT JOIN #SFMCTempinbound STI ON STI.Mobile = IP.Mobile and sti.ActionDateTime <= IP.AllocationDate
+	LEFT JOIN #SFMCTempinbound STI ON STI.Mobile = IP.Mobile and dateadd(hour, 1, sti.ActionDateTime) <= IP.AllocationDate
 
 group by 
 
@@ -320,6 +319,8 @@ Into #OHSMSFinal
   from #OHSMSnextnext ohf
 
 
+  
+
 ----------------------------------------------------------------------------------
 --Declare @LeadSubmittedStartDate Date = '2023-12-11'
 
@@ -334,7 +335,7 @@ T.Loannumber
 , t.Mobile
 , T.TEXTMinDate
 --, CalltoActionFlag
---, ourhouse.FirstOutboundPostAllocationDatetime
+, ourhouse.FirstOutboundPostAllocationDatetime
 , CASE WHEN (t.Mobile IS NULL) THEN 0 ELSE 1 END as PercentTexted
 , CASE WHEN (baf.AllocationSequence = 1) THEN 1 ELSE 0 END as AllocatedFlg
 , count(sfmc.loannumber) as [Pre-Allocate OutBound Texts]
@@ -343,7 +344,7 @@ T.Loannumber
 , count(t.Help_Stop_PEID) as HelpStopCount
 , count(t.OptOutPEID) as OptOutCount
 , count(t.webleadPEID) as webleadcount
---, Avg(Datediff(minute, ourhouse.FirstOutboundPostAllocationDatetime, T.TEXTMinDate)) as FirstSMFCInboundTexttoBankerOutboud
+, Avg(Datediff(minute, ourhouse.FirstOutboundPostAllocationDatetime, T.TEXTMinDate)) as FirstSMFCInboundTexttoBankerOutboud
 
 INTO #Final1
 
@@ -354,24 +355,24 @@ from #PEIDBase t
 	    LEFT JOIN #InboundFinal IBF ON IBF.Mobile = T.Mobile and len(ibf.mobile) >0
 
 
-	--Outer Apply(
-	--	Select top 1
+	Outer Apply(
+		Select top 1
 	------	 sum(ohsms.outbound) as OHTotalOutBound
 	------	, sum(ohsms.inbound) as OHTotalInbound
 	------	, Sum(ohsms.[Opt Out]) as OHSMSTotalOptOut
 	------	--, sum(b.bankercount) as bankercount
 	------	, AVG(ohsms.FirstOutboundPostAllocationDatediff / 60 ) as MinBetweenAllocationandBankerText
 	----	--, AVG(Datediff(minute, ohsms.FirstOutboundPostAllocationDatetime, si.TEXTMinDate)) as FirstSMFCInboundTexttoBankerOutboud
-	--	     ohsms.FirstOutboundPostAllocationDatetime
+		     ohsms.FirstOutboundPostAllocationDatetime
  
-	--	From #OHSMSFinal ohsms 
-	--	--left join #PEIDBASE si on si.LoanNumber = ohsms.loannumber
+		From #OHSMSFinal ohsms 
+		--left join #PEIDBASE si on si.LoanNumber = ohsms.loannumber
 	--	--left join #banker b on b.LoanNumber = ohsms.loannumber
-	--	where 1=1
-	--	and  ohsms.loannumber = t.LoanNumber
+		where 1=1
+		and  ohsms.loannumber = t.LoanNumber
 
-	--	order by ohsms.FirstOutboundPostAllocationDatetime desc
-	--		)OurHouse
+		order by ohsms.FirstOutboundPostAllocationDatetime desc
+			)OurHouse
 
 Where 1=1
 --and cast(t.leadsubmitteddate as date) >= @LeadSubmittedStartDate
@@ -385,7 +386,7 @@ T.Loannumber
 --, T.PEID
 , t.Mobile
 , T.TEXTMinDate
---, ourhouse.FirstOutboundPostAllocationDatetime
+, ourhouse.FirstOutboundPostAllocationDatetime
 , CASE WHEN (t.Mobile IS NULL) THEN 0 ELSE 1 END 
 , CASE WHEN (baf.AllocationSequence = 1) THEN 1 ELSE 0 END 
 
@@ -408,7 +409,7 @@ having count(*) > 1
 
 select top 100 * from  #OHSMSFinal 
 
-where loannumber = '3538657076'
+where loannumber = '3538661270'
 ----------------------------------------------------------------------------------------------
 --- Aggregated Data
 
