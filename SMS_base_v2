@@ -1,5 +1,3 @@
-
-
 --Declare @Startdate date = '2023-12-11'
 --DECLARE @enddate date = '2023-12-17'
 
@@ -16,7 +14,7 @@ Drop table if exists #textbase
 Select 
     SC.LoanNumber
     , cast(SC.loannumber as bigint) as jacketnumber
-	, dateadd(hour,-5,messagesenttimestamp) as LeadSubmittedDate
+    , dateadd(hour,-5,messagesenttimestamp) as LeadSubmittedDate
     , cast(dateadd(hour,-5,messagesenttimestamp) as date) as LeadSubmittedDateDate
     , OpportunityGroup
     , isnull(baf.StartDateTime, '2099-12-31') as AllocationDate
@@ -30,8 +28,8 @@ FROM src.salesforce.opportunitieschangedevent SC WITH (NOLOCK)
 where 1=1
     and eventreason = 'Lead Submitted' 
     and opportunitygroup in ('Core Refinance Web Leads Text', 'Core Refinance Web Leads Text Control')
-    and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17')
-	and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
+    and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20')
+    and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
 
 
 -----------------------------------------------------------------------------------
@@ -44,19 +42,23 @@ Select s.*
 , OpportunityGroup
 , datediff(day,LeadSubmittedDate, dateadd(hour, 1, s.ActionDateTime)) as Leadage
 , AllocationDate as FirstallocationDate
+, dateadd(hour, 1, ActionDateTime) as OutboundTextDate
 
 INTO #SFMCTempOutbound
 
 from SRC.SFMC.SmsMessageTrackingExtractView s
     INNER JOIN #textbase TB ON TB.LoanNumber = s.LoanNumber 
 
+
 where 1=1
 and dateadd(hour, 1, s.ActionDateTime) <= tb.AllocationDate --- pre-allocate texts only
 and dateadd(hour, 1 , s.ActionDateTime) >= '2023-12-15' --- only look at texts sent after pilot start date
 and datediff(day,LeadSubmittedDate, dateadd(hour, 1, s.ActionDateTime)) = 1
 and MessageText like '%Rocket Mortgage: Phone calls not your thing? Respond TEXT to start chatting with a home loan expert. Reply HELP for help, STOP to end text.%'
+and Delivered = 'true'
 
 CREATE NONCLUSTERED INDEX I_XD ON #SFMCTempoutbound (loannumber, Mobile)
+
 
 -----------------------------------------------------------------------------------
 
@@ -71,12 +73,12 @@ where
 --cast(actiondatetime as date) >= @Startdate
 --and 
 inbound = 'true'
+and Delivered = 'true'
 and dateadd(hour, 1, s.ActionDateTime) >= '2023-12-15' --- only look at texts received after pilot start date
 and MessageText not in ('WEBLEAD')
 
 
 CREATE NONCLUSTERED INDEX I_XD ON #SFMCTEmpInbound (loannumber, Mobile)
-
 
 -----------------------------------------------------------------------------------
 
@@ -104,7 +106,7 @@ INTO #PEIDBase1
 from #textbase TB 
     OUTER APPLY(
     Select top 1
-	IPB.Mobile
+    IPB.Mobile
 
     from #inboundprebase IPB
 
@@ -114,14 +116,14 @@ from #textbase TB
     )PEID
 
 
+
 drop table if exists #PEIDBASE
 select
 p.*
 , TextInboundFlag.Mobile as TextMobile
-, TextInboundFlag.min_inbound_date as TEXTMinDate
-, Help_Stop_Flag.mobile as Help_Stop_PEID
-, Opt_Out_Flag.mobile as OptOutPEID
-, Weblead_Flag.mobile as WebleadPEID
+, TextInboundFlag.min_inbound_date as min_inbound_date
+, TextInboundFlag.MessageText
+, TextInboundFlag.OutboundTextDate
 
 
 into #PEIDBASE
@@ -130,84 +132,47 @@ into #PEIDBASE
 
 OUTER APPLY(
     Select top 1
-	 IPB.Mobile
-	, dateadd(hour, 1, sms.ActionDateTime) as min_inbound_Date
+     IPB.Mobile
+	, sms.MessageText
+    , dateadd(hour, 1, sms.ActionDateTime) as min_inbound_Date
+	, so.OutboundTextDate
     from #inboundprebase IPB
-	left join #SFMCTEmpInbound sms on sms.mobile = IPB.Mobile
+    left join #SFMCTEmpInbound sms on sms.mobile = IPB.Mobile
+	left join #SFMCTempOutbound so on so.Mobile = IPB.Mobile
 
     WHERE 1=1
-	and  sms.MessageText like '%Text%'
-	and IPB.Mobile = p.mobile
+    and  (sms.MessageText like '%Text%' or sms.MessageText like 'Help' or sms.MessageText like '%Stop%' or sms.MessageText like '%Optout%' or sms.MessageText like '%Opt out%')
+    and IPB.Mobile = p.mobile
+	and so.OutboundTextDate <= dateadd(hour, 1, sms.ActionDateTime)
+	and Datediff(minute, so.OutboundTextDate, dateadd(hour, 1, sms.ActionDateTime)) <= 1440
+
+	order by sms.ActionDateTime asc
     )TextInboundFlag
 
-OUTER APPLY(
-    Select top 1
-	 IPB.Mobile
-
-    from #inboundprebase IPB
-	left join #SFMCTEmpInbound sms on sms.mobile = IPB.Mobile
-
-    WHERE 1=1
-	and ( sms.MessageText like 'Help' or sms.MessageText like '%Stop%')
-	and IPB.Mobile = p.mobile
-    )Help_Stop_Flag
-
-OUTER APPLY(
-    Select top 1
-	 IPB.Mobile
-
-    from #inboundprebase IPB
-	left join #SFMCTEmpInbound sms on sms.mobile = IPB.Mobile
-
-    WHERE 1=1
-	and  (sms.MessageText like '%Stop%' or sms.MessageText like '%Optout%' or sms.MessageText like '%Opt out%')
-	and IPB.Mobile = p.mobile
-    )Opt_Out_Flag
-
-OUTER APPLY(
-    Select top 1
-	 IPB.Mobile
-
-    from #inboundprebase IPB
-	left join #SFMCTEmpInbound sms on sms.mobile = IPB.Mobile
-
-    WHERE 1=1
-	and  sms.MessageText like  '%WEBLEAD%'
-	and IPB.Mobile = p.mobile
-    )Weblead_Flag
 
 -----------------------------------------------------------------------------------
 
-
 DROP TABLE IF EXISTS #InboundFinal
+
 Select IP.*
-, count(sti.mobile) as Inboundtexts
+, count(ip.mobile) as Inboundtexts
 
 
 INTO #InboundFinal
 
 from #PEIDBAse IP
-	LEFT JOIN #SFMCTempinbound STI ON STI.Mobile = IP.Mobile and dateadd(hour, 1, sti.ActionDateTime) <= IP.AllocationDate
-
+  --  LEFT JOIN #SFMCTempinbound STI ON STI.Mobile = IP.Mobile
+	 --and dateadd(hour, 1, sti.ActionDateTime) <= IP.AllocationDate
+where ip.MessageText not in ('Weblead')
 group by 
 
 ip.loannumber, ip.LeadSubmittedDateDate, jacketnumber, ip.mobile, ip.OpportunityGroup,  LeadSubmittedDate, AllocationDate, Allocated
-, ip.Textmobile, ip.Help_Stop_PEID, ip.OptOutPEID, ip.WebleadPEID, ip.TEXTMinDate
+, ip.Textmobile, ip.min_inbound_date, ip.MessageText, ip.OutboundTextDate
 
 ----------------------------------------------------------------------------------
-Drop table if Exists #banker, #OHSMSStart, #OHSMSMiddle, #OHSMSFinal, #OHSMSnext, #ohsmsnextnext
+Drop table if Exists #banker, #OHSMSStart, #OHSMSMiddle, #OHSMSnext, #ohsmsnextnext, #ohsmsfinalsums
 
-
---select af.LoanNumber
---, count(bankerid) 'bankercount' 
-
---Into #banker
-
---from BILoan.dbo.BankerAllocationFact af
---inner join #allocation a on a.loannumber = af.LoanNumber and a.EventDateTime < af.EndDateTime
-
---group by af.LoanNumber
-
+/* Brings In Allocation Date to OH Messaging Session DAta */ 
 
 select m.*
 , fb.AllocationDate
@@ -218,6 +183,7 @@ from src.SalesForce.OurHouseMessagingSession m
 inner join #PEIDBASE fb on fb.LoanNumber = m.loannumber_c
 where 1=1 
 
+/* Brings in Converstation  Entry Data from OH -- While adding in time of text "Entry Time" & Outbound, inbound, optout flag */ 
 
 select 
 ce.conversationentry_sk 
@@ -232,10 +198,11 @@ ce.conversationentry_sk
 , entrytype
 , ce.seq
 , ce.actorname
+, m.AllocationDate
 , case when m.loannumber_c = '' Then null Else m.loannumber_c End loannumber 
-  , Case When m.origin = 'TriggeredOutbound' Then 1 ELSE 0 END AS Outbound
-  , Case When m.origin = 'InboundInitiated'  Then 1 ELSE 0 END AS Inbound
-  , case when m.origin = 'OptOut' Then 1 ELSE 0 END AS 'Opt Out' 
+  , Case When m.origin = 'TriggeredOutbound' Then 1 ELSE null END AS Outbound
+  , Case When m.origin = 'InboundInitiated'  Then 1 ELSE null END AS Inbound
+  , case when m.origin = 'OptOut' Then 1 ELSE null END AS 'Opt Out' 
 , CASE WHEN m.origin = 'TriggeredOutbound' THEN 'OutBound'
        WHEN m.origin = 'InboundInitiated' THEN 'InBound'
        WHEN m.origin = 'OptOut' THEN 'Opt Out'
@@ -261,23 +228,16 @@ WHERE 1=1
     AND m.caseid = '' -- this being populated would indicate the sms was routed to OPS
   --  AND cast(convert(varchar, ce.entrytime, 112) AS int) between @StartDateID and @EndDateID
 
-  
-
   /*Creates Text Orders for LN, # of TMs texting a loan & Removes Optout Duplicates */
 
   select s.*
-  , a.AllocationDate 'allocationdttime'
 --, datediff(second, Allocation.EventDateTime, s.entrytime)*1.00 AS AllocatetoSMSdatediff
-, Case When datediff_big(second, a.AllocationDate, s.entrytime)*1.00 < 0.00 Then 1 
+, Case When datediff_big(second, AllocationDate, s.entrytime)*1.00 < 0.00 Then 1 
                                                                         Else 0 
                                                                         End OHSMSPreAllocation
     Into #OHSMSNext
 
   from #OHSMSMiddle s
-
-  /*Brings in Allocation Date & Time */
-left join #PEIDBASE a on a.LoanNumber = s.loannumber
-  
   where 1=1 
   and s.RemoveOptSeq = 0
 
@@ -289,7 +249,8 @@ left join #PEIDBASE a on a.LoanNumber = s.loannumber
   , oh.name
   , oh.actorname
   , oh.entrytime
-  , oh.allocationdttime
+  , oh.messagingsessionstarttime
+  , oh.allocationdate
   , oh.origin
   , oh.Inbound
   , oh.Outbound
@@ -299,33 +260,100 @@ left join #PEIDBASE a on a.LoanNumber = s.loannumber
   , ROW_NUMBER()OVER(PARTITION BY oh.loannumber ORDER BY oh.Entrytime asc) 'LoanTextOrder'
   , Rank()Over(Partition By oh.loannumber order by oh.sessionownercommon ) 'banker count'
   , min(oh.entrytime)OVER(Partition By oh.loannumber order by oh.entrytime asc) 'earliestsmsdt' 
- 
  ,  row_number()OVER(Partition By oh.loannumber, oh.OHSMSPreAllocation  , oh.Outbound  order by oh.entrytime asc) as ResponseTimeRn
 
   Into #OHSMSnextnext
 
   from #OHSMSNext oh
 
-  drop table #OHSMSFinal
+
+  drop table if exists #OHSMSFinal, #ohsmsprefinal, #ohsmsfinalsums
+
   Select *
-  , case when ResponseTimeRn = 1 and OHSMSPreAllocation = 0 and Outbound = 1  then datediff_big(second, ohf.allocationdttime, ohf.entrytime) * 1.00
+  , case when ResponseTimeRn = 1 and OHSMSPreAllocation = 0 and Outbound = 1  then datediff_big(second, ohf.AllocationDate, ohf.entrytime) * 1.00
                                 Else null
-                                    End FirstOutboundPostAllocationDatediff
+                                    End FirstOutboundPostAllocationDatediffOH
 
 , case when ResponseTimeRn = 1 and OHSMSPreAllocation = 0 and Outbound = 1 then ohf.entrytime else NULL end as FirstOutboundPostAllocationDatetime
 
-
-Into #OHSMSFinal
+Into #OHSMSprefinal
   from #OHSMSnextnext ohf
 
 
-  
+
+  Select pf.loannumber
+  , sum(pf.Outbound) 'OH Outbound Count'
+  , sum(pf.Inbound) 'OH Inbound Count'
+  , Sum(pf.[Opt Out]) 'OH Opt Out Count'
+
+  Into #ohsmsfinalsums
+
+  from #OHSMSpreFinal pf
+  left join #PEIDBASE pb on pb.LoanNumber = pf.loannumber
+
+ where dateadd(minute, 1, pf.messagingsessionstarttime) > pb.min_inbound_date
+
+ Group by pf.loannumber
+
+ 
+select pf.loannumber
+, pf.FirstOutboundPostAllocationDatetime
+Into #ohsmsfinal
+ 
+from #OHSMSprefinal pf
 
 ----------------------------------------------------------------------------------
 --Declare @LeadSubmittedStartDate Date = '2023-12-11'
 
-DROP TABLE IF EXISTS #Final1
 
+ --   select top 100 * 
+ --   from #final1 where mobile ='15676868905' 
+
+-- select 
+-- s.LoanNumber
+-- , count(*) 
+-- from SRC.SFMC.SmsMessageTrackingExtractView s
+-- inner join #final1 f on f.LoanNumber= s.LoanNumber
+-- where MessageText like ('%text%') and f.OpportunityGroup = 'Core Refinance Web Leads Text'
+-- group by s.LoanNumber
+--having count(*) > 1
+
+--select count(loannumber) from #final1
+ 
+select top 100 * from SRC.SFMC.SmsMessageTrackingExtractView where mobile = '15169711368' order by ActionDateTime
+ 
+ Select * from #final1 where mobile = '15169711368' 
+ 
+ order by ActionDateTime
+
+select top 100 * from SRC.SFMC.SmsMessageTrackingExtractView 
+ where LoanNumber = '3538817845'  order by ActionDateTime
+
+
+
+ SELECT M.starttime, M.Origin, C.message--,  M.*  
+FROM Reporting.SalesForce.vwOurHouseMessagingSession M
+    LEFT JOIN Reporting.SalesForce.vwOurHouseConversationEntry C ON C.conversationid = M.messagingsession_sk
+WHERE 1=1
+    AND loannumber_c = '3538817845'
+    AND message NOT IN ('ChatbotEstablished', 'ChatbotEndedChatByAction')
+ORDER BY M.starttime
+ 
+-- mobile = '3538657076' order by ActionDateTime
+
+--select top 100 * from #final1 	
+
+--where helpflag > 0
+
+select top 100 * from #final1 where
+textkeywordflag > 0
+
+--select top 100 * from #final1
+--where loannumber = '3538658464' 
+--	where textkeywordflag > 0
+
+
+DROP TABLE IF EXISTS #Final1
 Select 
 T.Loannumber
 , T.LeadSubmittedDate
@@ -333,18 +361,22 @@ T.Loannumber
 , T.OpportunityGroup
 , T.AllocationDate
 , t.Mobile
-, T.TEXTMinDate
---, CalltoActionFlag
+, T.min_inbound_date
+, t.OutboundTextDate
+, Datediff(minute, t.OutboundTextDate, t.min_inbound_date) as outtoindatediff
 , ourhouse.FirstOutboundPostAllocationDatetime
 , CASE WHEN (t.Mobile IS NULL) THEN 0 ELSE 1 END as PercentTexted
 , CASE WHEN (baf.AllocationSequence = 1) THEN 1 ELSE 0 END as AllocatedFlg
 , count(sfmc.loannumber) as [Pre-Allocate OutBound Texts]
 , sum(inboundtexts) as [Pre-Allocate Inbound Texts]
-, count(t.TextMobile) as TextKeyWordCount
-, count(t.Help_Stop_PEID) as HelpStopCount
-, count(t.OptOutPEID) as OptOutCount
-, count(t.webleadPEID) as webleadcount
-, Avg(Datediff(minute, ourhouse.FirstOutboundPostAllocationDatetime, T.TEXTMinDate)) as FirstSMFCInboundTexttoBankerOutboud
+, datediff.FirstSMFCInboundTexttoBankerOutboud
+, ohsum.[OH Inbound Count] 
+, ohsum.[OH Outbound Count]
+, ohsum.[OH Opt Out Count]
+
+, Sum(Case when t.MessageText like '%Text%' then 1 else 0 end) as TextKeyWordFlag
+, Sum(Case when t.MessageText like 'Help' then 1 else 0 end) as HelpFlag
+, Sum(Case when (t.MessageText  like '%Stop%' or t.MessageText like '%Optout%' or t.MessageText like '%Opt out%') then 1 else 0 end) as OptOutFlag
 
 INTO #Final1
 
@@ -352,30 +384,30 @@ from #PEIDBase t
     LEFT JOIN BIloan.dbo.BankerAllocationFact baf on baf.LoanNumber = t.LoanNumber and baf.AllocationSequence = 1
     LEFT JOIN #SFMCTempoutbound SFMC ON SFMC.LoanNumber = t.loannumber and sfmc.InBound is null
     --LEFT JOIN #InboundFinal IBF ON IBF.PEID = T.PEID and len(ibf.peid) >0
-	    LEFT JOIN #InboundFinal IBF ON IBF.Mobile = T.Mobile and len(ibf.mobile) >0
-
+        LEFT JOIN #InboundFinal IBF ON IBF.Mobile = T.Mobile and len(ibf.mobile) >0
+        left join #ohsmsfinalsums ohsum on ohsum.loannumber = t.LoanNumber
+        Outer Apply(
+                    Select top 1 
+					ourhouse.FirstOutboundPostAllocationDatetime
+                            From #OHSMSFinal ourhouse
+                                where 1=1
+                                    and ourhouse.loannumber = t.LoanNumber
+                                    order by ourhouse.FirstOutboundPostAllocationDatetime desc
+                                    )OurHouse
 
 	Outer Apply(
 		Select top 1
-	------	 sum(ohsms.outbound) as OHTotalOutBound
-	------	, sum(ohsms.inbound) as OHTotalInbound
-	------	, Sum(ohsms.[Opt Out]) as OHSMSTotalOptOut
-	------	--, sum(b.bankercount) as bankercount
-	------	, AVG(ohsms.FirstOutboundPostAllocationDatediff / 60 ) as MinBetweenAllocationandBankerText
-	----	--, AVG(Datediff(minute, ohsms.FirstOutboundPostAllocationDatetime, si.TEXTMinDate)) as FirstSMFCInboundTexttoBankerOutboud
-		     ohsms.FirstOutboundPostAllocationDatetime
+		 AVG(Datediff(minute, si.min_inbound_date, ohsms.FirstOutboundPostAllocationDatetime)) as FirstSMFCInboundTexttoBankerOutboud
  
 		From #OHSMSFinal ohsms 
-		--left join #PEIDBASE si on si.LoanNumber = ohsms.loannumber
-	--	--left join #banker b on b.LoanNumber = ohsms.loannumber
+	left join #PEIDBASE si on si.LoanNumber = ohsms.loannumber
 		where 1=1
 		and  ohsms.loannumber = t.LoanNumber
-
-		order by ohsms.FirstOutboundPostAllocationDatetime desc
-			)OurHouse
+		and si.MessageText like '%Text%'
+		)Datediff
 
 Where 1=1
---and cast(t.leadsubmitteddate as date) >= @LeadSubmittedStartDate
+
 
 Group by 
 T.Loannumber
@@ -383,36 +415,19 @@ T.Loannumber
 , T.LeadSubmittedDateDate
 , T.OpportunityGroup
 , T.AllocationDate
---, T.PEID
 , t.Mobile
-, T.TEXTMinDate
+, T.min_inbound_date
+, t.OutboundTextDate
 , ourhouse.FirstOutboundPostAllocationDatetime
 , CASE WHEN (t.Mobile IS NULL) THEN 0 ELSE 1 END 
 , CASE WHEN (baf.AllocationSequence = 1) THEN 1 ELSE 0 END 
+, ohsum.[OH Inbound Count] 
+, ohsum.[OH Outbound Count]
+, ohsum.[OH Opt Out Count]
+, datediff.FirstSMFCInboundTexttoBankerOutboud
 
 
-
-
-select
-loannumber,
-count(*)
-from #Final1 
-group by loannumber
-having count(*) > 1
-
-
- select top 100 * from #Final1 order by LoanNumber
-
-
- where TextKeyWordCount > 0 order by LoanNumber
-
-
-select top 100 * from  #OHSMSFinal 
-
-where loannumber = '3538661270'
-----------------------------------------------------------------------------------------------
---- Aggregated Data
-
+---- aggregation------
 
 Select 
 OpportunityGroup
@@ -421,20 +436,46 @@ OpportunityGroup
 , round(avg(cast(allocatedflg as float)),4) as NetLeadtoAllocate
 , sum([Pre-allocate Outbound Texts]) as [Pre-Allocate Outbound Texts]
 , sum([Pre-Allocate Inbound Texts]) as [Pre-Allocate Inbound Texts]
-, sum(TextKeyWordCount) as [Text Key Word Count]
-, sum(HelpStopCount) as [Help Stop Count]
-, sum(Optoutcount) as [Opt Out Count]
-, sum(webleadcount) as [Weblead Count]
+, sum(TextKeyWordFlag) as [Text Key Word Count]
+, sum(HelpFlag) as [Help Stop Count]
+, sum(OptOutFlag) as [Opt Out Count]
+, AVG(FirstSMFCInboundTexttoBankerOutboud) as AverageMinutesBetweenTextandBanker
+, sum([OH Inbound Count] ) as [OH Inbound Sum]
+, sum([OH Outbound Count] ) as [OH Outbound Sum]
+, sum([OH Opt Out Count] ) as [OH Opt Out Sum]
+, sum(case when [OH Inbound Count] is not null then 1 else 0 end ) as sessionscreated
 
 From #final1
 
 Group by OpportunityGroup
 
 
+-------------------------------------------------------------------
+
+Drop table if exists #textbase2
+Select 
+    SC.LoanNumber
+	, ltc.WebCode
+    , cast(SC.loannumber as bigint) as jacketnumber
+    , dateadd(hour,-5,messagesenttimestamp) as LeadSubmittedDate
+    , cast(dateadd(hour,-5,messagesenttimestamp) as date) as LeadSubmittedDateDate
+    , isnull(baf.StartDateTime, '2099-12-31') as AllocationDate
+    , CASE WHEN (BAF.Allocationsequence = 1) THEN 1 ELSE 0 END as Allocated
+
+into #textbase2 
+FROM src.salesforce.opportunitieschangedevent SC WITH (NOLOCK)
+        LEFT JOIN biloan.dbo.BankerAllocationFact baf on baf.loannumber = SC.LoanNumber and baf.allocationsequence = 1
+		left join qlods.dbo.lola l on l.JacketNumber = sc.LoanNumber
+		left join qlods.dbo.webcodedim ltc on ltc.webcodeid = l.webreferrerid
 
 
+where 1=1
+    and eventreason = 'Lead Submitted' 
+and ltc.WebCode in ('WHALF', 'WHALFRKT', 'WHALFCALC', 'WHALFRKTCHATCT', 'WHALFCHATCTRL')
+    and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20')
+    and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
 
-
+	select top 100 *  from #textbase2
 
 
 
@@ -452,7 +493,7 @@ From EDW.Loan.LoanMajorMilestoneFact LM WITH (NOLOCK)
 INNER JOIN EDW.dimensions.loanmilestonedim lmd WITH (NOLOCK) on lmd.loanmilestonesk = lm.loanmilestonesk 
 LEFT JOIN EDW.Dimensions.LoanIdentifierDim LID WITH (NOLOCK) ON LID.LoanIdentifierDimSK = LM.LoanIdentifierDimSK 
    and LID.IsCurrentRecordInd = 1
-inner join #textbase l on l.Loannumber = LID.LoanNumber
+inner join #textbase2 l on l.Loannumber = LID.LoanNumber
 
 Where 1=1
 and lm.IsCurrentRecordInd = 1
@@ -464,6 +505,7 @@ and lmd.GroupID in (
                     , 6 -- closing
                     , 110 -- Killed
                     )
+
 
 
 --Combining milestone data with base population
@@ -471,15 +513,15 @@ DROP TABLE IF EXISTS #milestones2
 select
 l.*
 --, Convert(Varchar,Isnull(isnull(Allocation.EventDateTime, (CASE WHEN (l.PoolEndDate = '2199-01-01 00:00:00.000') THEN NULL ELSE l.PoolEndDate END)),isnull(dateadd(day,15,l.PoolStartDate),dateadd(day,15,l.LeadCreateDate))),112) as LeadEnddateID
-, cast(Allocation.EventDateTime as date) as AllocationDate
+, cast(Allocation.EventDateTime as date) as AllocationDate2
 , cast(Applications.EventDateTime as date) as ApplicationDate
 , cast(Folder.EventDateTime as date) as FolderDate
 , cast(Credit.EventDateTime as date) as CreditDate
 , cast(Closing.EventDateTime as date) as ClosingDate
 , cast(Killed.EventDateTime as date) as KilledDate
 
-into #milestons2
-from #textbase l
+into #milestones2
+from #textbase2 l
 outer apply(
             select top 1
            m.EventDateTime
@@ -536,126 +578,19 @@ outer apply(
             order by m.EventDateTime asc
             )Killed
 
---------------------------------------------------------------------------
---------------------------------------------------------------------------
 
 
 
-DROP TABLE IF EXISTS #milestones
-SELECT
-  LID.Loannumber
-, LID.LoanNumberID
-, lid.LoanIdentifierDimSK
-, lm.EventDateDimId
-, lm.EventDateTime
-, lmd.GroupName
-
-INTO #milestones
-From EDW.Loan.LoanMajorMilestoneFact LM WITH (NOLOCK)
-INNER JOIN EDW.dimensions.loanmilestonedim lmd WITH (NOLOCK) on lmd.loanmilestonesk = lm.loanmilestonesk 
-LEFT JOIN EDW.Dimensions.LoanIdentifierDim LID WITH (NOLOCK) ON LID.LoanIdentifierDimSK = LM.LoanIdentifierDimSK 
-   and LID.IsCurrentRecordInd = 1
-inner join #textbase l on l.Loannumber = LID.LoanNumber
-
-Where 1=1
-and lm.IsCurrentRecordInd = 1
-and lmd.GroupID in (
-                   7 --allocation
-                    , 68 -- app
-                    , 3 --Folder
-                    , 1 -- credit
-                    , 6 -- closing
-                    , 110 -- Killed
-                    )
-
-
---Combining milestone data with base population
-DROP TABLE IF EXISTS #finalbase
 select
-    LoanNumber
-    , LeadSubmittedDateDate
-    , OpportunityGroup
---, Convert(Varchar,Isnull(isnull(Allocation.EventDateTime, (CASE WHEN (l.PoolEndDate = '2199-01-01 00:00:00.000') THEN NULL ELSE l.PoolEndDate END)),isnull(dateadd(day,15,l.PoolStartDate),dateadd(day,15,l.LeadCreateDate))),112) as LeadEnddateID
-, cast(Allocation.EventDateTime as date) as AllocationDate
-, cast(Applications.EventDateTime as date) as ApplicationDate
-, cast(Folder.EventDateTime as date) as FolderDate
-, cast(Credit.EventDateTime as date) as CreditDate
-, cast(Closing.EventDateTime as date) as ClosingDate
-, cast(Killed.EventDateTime as date) as KilledDate
-
-into #finalbase
-from #textbase l
-outer apply(
-            select top 1
-           m.EventDateTime
-            from #milestones m
-            where 1=1
-            and m.LoanNumber = l.LoanNumber
-            and m.GroupName = 'Allocated'
-            order by m.EventDateTime asc
-            )Allocation
-
-outer apply(
-            select top 1
-            m.EventDateTime
-            from #milestones m
-            where 1=1
-           and m.LoanNumber = l.LoanNumber
-            and m.GroupName = 'Application'
-            order by m.EventDateTime asc
-            )Applications
-outer apply(
-            select top 1
-            m.EventDateTime
-            from #milestones m
-            where 1=1
-           and m.LoanNumber = l.LoanNumber
-            and m.GroupName = 'Folder'
-            order by m.EventDateTime asc
-            )Folder
-outer apply(
-            select top 1
-            m.EventDateTime
-            from #milestones m
-            where 1=1
-           and m.LoanNumber = l.LoanNumber
-            and m.GroupName = 'Credit'
-            order by m.EventDateTime asc
-            )Credit
-outer apply(
-            select top 1
-            m.EventDateTime
-            from #milestones m
-            where 1=1
-           and m.LoanNumber = l.LoanNumber
-            and m.GroupName = 'Closing'
-            order by m.EventDateTime asc
-            )Closing
-outer apply(
-            select top 1
-            m.EventDateTime
-            from #milestones m
-            where 1=1
-           and m.LoanNumber = l.LoanNumber
-            and m.GroupName = 'Killed'
-            order by m.EventDateTime asc
-            )Killed
-
-
-
-SELECT
- LeadSubmittedDateDate
- , OpportunityGroup
- , count(l.LoanNumber) as TotalLeads
-, count(l.AllocationDate) as TotalAllocations
-, count(l.ApplicationDate) as TotalApplications
-, count(l.CreditDate) as TotalCredits
-, count(l.FolderDate) as TotalFolders
-, count(l.ClosingDate) as TotalClosings
-, count(l.killeddate) as TotalWithdraws
-, sum(case when l.killeddate <= l.AllocationDate then 1 else 0 end) as TotalWithdrawsSameDay
-
- from #finalbase l
-
- group by  LeadSubmittedDateDate
- , OpportunityGroup
+--WebCode
+ count(LoanNumber) as TotalLeads
+, count(AllocationDate2) as AllocationCount
+, count(ApplicationDate) As ApplicationCount
+, count(creditDate) as CreditCount
+, count(folderdate) as foldercount
+, count(closingdate) as closingcount
+, count(killeddate) as TotalWithdraws
+, sum(case when killeddate <= AllocationDate2 then 1 else 0 end) as TotalWithdrawsSameDay
+			
+from #milestones2
+--group by WebCode
