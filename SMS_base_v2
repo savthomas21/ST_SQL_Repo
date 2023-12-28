@@ -321,6 +321,18 @@ from #PEIDBASE  pb
                                     order by ourhouse.FirstOutboundPostAllocationDatetime desc
                                     )pf
 
+
+
+
+select * from #OHSMSprefinal   where loannumber = '3538875260'
+
+SELECT M.starttime, M.Origin, C.message--,  M.*  
+FROM Reporting.SalesForce.vwOurHouseMessagingSession M
+    LEFT JOIN Reporting.SalesForce.vwOurHouseConversationEntry C ON C.conversationid = M.messagingsession_sk
+WHERE 1=1
+    AND loannumber_c = '3538817845'
+    AND message NOT IN ('ChatbotEstablished', 'ChatbotEndedChatByAction')
+ORDER BY M.starttime
 ----------------------------------------------------------------------------------
 --Declare @LeadSubmittedStartDate Date = '2023-12-11'
 
@@ -337,20 +349,24 @@ T.Loannumber
 , t.Mobile
 , T.min_inbound_date
 , t.OutboundTextDate
-, Datediff(minute, t.OutboundTextDate, t.min_inbound_date) as outtoindatediff
+, case when t.MessageText like '%Text%' then datediff(minute, t.OutboundTextDate, t.min_inbound_date) else 0 end as outtoindatediff
+, case when t.MessageText like '%Text%' then datediff(minute, t.min_inbound_date, t.AllocationDate) else 0 end as AllocationtoInboundDateDiff
 , ohf.FirstOutboundPostAllocationDatetime
 , CASE WHEN (t.Mobile IS NULL) THEN 0 ELSE 1 END as PercentTexted
 , CASE WHEN (baf.AllocationSequence = 1) THEN 1 ELSE 0 END as AllocatedFlg
-, count(sfmc.loannumber) as [Pre-Allocate OutBound Texts]
-, sum(inboundtexts) as [Pre-Allocate Inbound Texts]
-, datediff.FirstSMFCInboundTexttoBankerOutboud
+
 , ohf.[OH Inbound Count] 
 , ohf.[OH Outbound Count]
 , ohf.[OH Opt Out Count]
 
-, Sum(Case when t.MessageText like '%Text%' then 1 else 0 end) as TextKeyWordFlag
-, Sum(Case when t.MessageText like 'Help' then 1 else 0 end) as HelpFlag
-, Sum(Case when (t.MessageText  like '%Stop%' or t.MessageText like '%Optout%' or t.MessageText like '%Opt out%') then 1 else 0 end) as OptOutFlag
+, Case when t.MessageText like '%Text%' then 1 else 0 end as TextKeyWordFlag
+, Case when t.MessageText like 'Help' then 1 else 0 end as HelpFlag
+, Case when (t.MessageText  like '%Stop%' or t.MessageText like '%Optout%' or t.MessageText like '%Opt out%') then 1 else 0 end as OptOutFlag
+
+, count(sfmc.loannumber) as [Pre-Allocate OutBound Texts]
+, sum(inboundtexts) as [Pre-Allocate Inbound Texts]
+, datediff.FirstSMFCInboundTexttoBankerOutboud
+, datediff.AllocationtoBankerOutboud
 
 INTO #Final1
 
@@ -363,7 +379,7 @@ left join #ohsmsfinal ohf on ohf.loannumber = t.LoanNumber
 Outer Apply(
         Select top 1
          AVG(Datediff(minute, si.min_inbound_date, ohsms.FirstOutboundPostAllocationDatetime)) as FirstSMFCInboundTexttoBankerOutboud
-
+		 ,AVG(Datediff(minute, si.AllocationDate, ohsms.FirstOutboundPostAllocationDatetime)) as AllocationtoBankerOutboud
         From #OHSMSFinal ohsms 
     left join #PEIDBASE si on si.LoanNumber = ohsms.loannumber
         where 1=1
@@ -382,6 +398,7 @@ T.Loannumber
 , t.Mobile
 , T.min_inbound_date
 , t.OutboundTextDate
+, t.MessageText
 , ohf.FirstOutboundPostAllocationDatetime
 , CASE WHEN (t.Mobile IS NULL) THEN 0 ELSE 1 END 
 , CASE WHEN (baf.AllocationSequence = 1) THEN 1 ELSE 0 END 
@@ -389,8 +406,7 @@ T.Loannumber
 , ohf.[OH Outbound Count]
 , ohf.[OH Opt Out Count]
 , datediff.FirstSMFCInboundTexttoBankerOutboud
-
-
+, datediff.AllocationtoBankerOutboud
 
 -------------------------------------------------------------------
 
@@ -542,8 +558,10 @@ Select
 , sum(TextKeyWordFlag) as [Text Key Word Count]
 , sum(HelpFlag) as [Help Stop Count]
 , sum(OptOutFlag) as [SFMC Opt Out Count]
-, AVG(FirstSMFCInboundTexttoBankerOutboud) as AverageMinutesBetweenTextandBanker
-, AVG(l.outtoindatediff) as OutboundtoInboundSFMCMin
+, Sum(FirstSMFCInboundTexttoBankerOutboud) as SumMinutesBetweenTextandBanker
+, Sum(outtoindatediff) as SumOutboundtoInboundSFMCMin
+, SUM(AllocationtoInboundDateDiff) SumInboundtoAllocationMin
+, sum(AllocationtoBankerOutboud) as SumAllocationtoBankerOutbound
 , sum([OH Inbound Count] ) as [OH Inbound Sum]
 , sum([OH Outbound Count] ) as [OH Outbound Sum]
 , sum([OH Opt Out Count] ) as [OH Opt Out Sum]
@@ -593,7 +611,6 @@ group by
 
 
 
-select top 100 * from bisandboxwrite.dbo.sthom_texting_metrics_hourly2
 
 
 Drop table if exists bisandboxwrite.dbo.sthom_texting_metrics_hourly2
