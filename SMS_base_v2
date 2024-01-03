@@ -515,7 +515,7 @@ b.LoanNumber
 ,b.CallStartDateTime
 ,b.CallEndDateTime
 ,b.CallEndEvent
---, case when b.callstartdatetime < l.OutboundTextDate then 1 else 0 end as CallsBeforeTextFlag
+, case when b.callstartdatetime < l.OutboundTextDate then 1 else 0 end as CallsBeforeTextFlag
 
 into #calls
 from Reporting.MB.CallEventRollup_BLD b
@@ -578,7 +578,8 @@ l.LoanNumber
 , sum(case when m.killeddate <= m.AllocationDate then 1 else 0 end) as TotalWithdrawsSameDay
 , sum(c.TransferredFlag) as TransferredSum
 , sum(c.AnswerPhoneFlag) as AnsweredPhoneSum
-, sum(TotalCalls.TotalCalls) as TotalCalls
+, sum(TotalCalls.callbeforetextsum) as TotalCallsBeforeText
+, sum(TotalCalls.callaftertextsum) as TotalCallsAfterText
 , sum(case when [Pre-Allocate Inbound Texts] > 0 then 1 else 0 end) as Response_flag
 , sum(case when [Pre-Allocate Inbound Texts] > 0 and l.allocationdate is not null then 1 else 0 end) as AllocationfromTextTotal
 , getdate() as RefreshDate
@@ -592,14 +593,12 @@ left join #calls2 c on c.LoanNumber = l.LoanNumber
 
 outer apply(
             select
-			--d.CallsBeforeTextFlag,
-            count(d.LoanNumber) as TotalCalls
+			 Sum(case when callsbeforetextflag = 1 then 1 else 0 end) as callbeforetextsum
+			, Sum(case when callsbeforetextflag = 0 then 1 else 0 end) as callaftertextsum
             from #calls d
             where 1=1
             and d.LoanNUmber = l.LoanNumber
-			--group by d.CallsBeforeTextFlag
             )TotalCalls
-
 
 group by
 l.LoanNumber
@@ -643,9 +642,6 @@ from #Final1
  where AllocationDate != '2099-12-31'
 
 
-
-
-
 ---- aggregation------
 
 
@@ -673,21 +669,21 @@ Group by OpportunityGroup
 select top 100 * from #final1 where
 textkeywordflag > 0
 
-select count( distinct loannumber) from #final1
 
 drop table if exists #test
 Select 
 f.LoanNumber
-,f.OpportunityGroup
-, totalcalls.CallsBeforeTextFlag
+, f.OpportunityGroup
 , count(f.loannumber) as TotalLoans
 , sum(TotalCalls.TotalCalls) as TotalCalls
-into #test
+--into #test
 From #final1 f
 outer apply(
             select
+			count(case when CallsBeforeTextFlag = 1 then 
+			
 			d.CallsBeforeTextFlag
-            ,count(d.LoanNumber) as TotalCalls
+            , count(d.LoanNumber) as TotalCalls
             from #calls d
             where 1=1
             and d.LoanNUmber = f.LoanNumber
@@ -695,30 +691,32 @@ outer apply(
             )TotalCalls
 
 Group by 
-
-, OpportunityGroup
-, totalcalls.CallsBeforeTextFlag
-
-
-
-Select 
-f.OpportunityGroup
-, count(f.loannumber) as TotalLoans
-, sum(TotalCalls.TotalCalls) as TotalCalls
-
-From #final1 f
-outer apply(
-            select
-
-            count(d.LoanNumber) as TotalCalls
-            from #calls d
-            where 1=1
-            and d.LoanNUmber = f.LoanNumber
-
-            )TotalCalls
-
-Group by 
-
  OpportunityGroup
+ , f.LoanNumber
 
 
+ Select
+ LoanNumber
+ , OpportunityGroup
+ , count(*) from #test group by  LoanNumber
+ , OpportunityGroup having count(*) > 1
+
+ select * from #test where loannumber = '3538647900'
+
+
+ Select count(loannumber), count(distinct loannumber) from #test
+
+
+
+ Select
+ --loannumber
+
+  Sum(case when callsbeforetextflag = 1 then 1 else 0 end) as callbeforetextsum
+  , Sum(case when callsbeforetextflag = 0 then 1 else 0 end) as callaftertextsum
+
+ from #calls
+ --group by loannumber
+ order by callbeforetextsum desc
+
+ 
+ top 100 * from #calls
