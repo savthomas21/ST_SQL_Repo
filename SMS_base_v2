@@ -338,25 +338,22 @@ T.Loannumber
 , t.Mobile
 , T.min_inbound_date
 , t.OutboundTextDate
-, case when t.MessageText like '%Text%' then datediff(minute, t.OutboundTextDate, t.min_inbound_date) else 0 end as outtoindatediff
-, case when t.MessageText like '%Text%' and t.allocationdate != '2099-12-31' then datediff(minute, t.min_inbound_date, t.AllocationDate) else 0 end as AllocationtoInboundDateDiff
+, case when t.MessageText like '%Text%' then datediff(minute, t.OutboundTextDate, t.min_inbound_date) else NULL end as outtoindatediff
+, case when t.MessageText like '%Text%' and t.allocationdate != '2099-12-31' then datediff(minute, t.min_inbound_date, t.AllocationDate) else NULL end as AllocationtoInboundDateDiff
 , ohf.FirstOutboundPostAllocationDatetime
 , CASE WHEN (t.Mobile IS NULL) THEN 0 ELSE 1 END as PercentTexted
 , CASE WHEN (baf.AllocationSequence = 1) THEN 1 ELSE 0 END as AllocatedFlg
-
 , ohf.[OH Inbound Count] 
 , ohf.[OH Outbound Count]
 , ohf.[OH Opt Out Count]
 , ohf.[Banker Count]
-
 , Case when t.MessageText like '%Text%' then 1 else 0 end as TextKeyWordFlag
 , Case when t.MessageText like 'Help' then 1 else 0 end as HelpFlag
 , Case when (t.MessageText  like '%Stop%' or t.MessageText like '%Optout%' or t.MessageText like '%Opt out%') then 1 else 0 end as OptOutFlag
-
 , count(sfmc.loannumber) as [Pre-Allocate OutBound Texts]
 , sum(inboundtexts) as [Pre-Allocate Inbound Texts]
-, datediff.FirstSMFCInboundTexttoBankerOutboud
-, datediff.AllocationtoBankerOutboud
+, datediff.FirstSMFCInboundTexttoBankerOutbound
+, datediff.AllocationtoBankerOutbound
 
 INTO #Final1
 
@@ -368,8 +365,8 @@ left join #ohsmsfinal ohf on ohf.loannumber = t.LoanNumber
 
 Outer Apply(
         Select top 1
-         AVG(Datediff(minute, si.min_inbound_date, ohsms.FirstOutboundPostAllocationDatetime)) as FirstSMFCInboundTexttoBankerOutboud
-		 ,AVG(Datediff(minute, si.AllocationDate, ohsms.FirstOutboundPostAllocationDatetime)) as AllocationtoBankerOutboud
+         AVG(Datediff(minute, si.min_inbound_date, ohsms.FirstOutboundPostAllocationDatetime)) as FirstSMFCInboundTexttoBankerOutbound
+		 ,AVG(Datediff(minute, si.AllocationDate, ohsms.FirstOutboundPostAllocationDatetime)) as AllocationtoBankerOutbound
         From #OHSMSFinal ohsms 
     left join #PEIDBASE si on si.LoanNumber = ohsms.loannumber
         where 1=1
@@ -396,10 +393,8 @@ T.Loannumber
 , ohf.[OH Outbound Count]
 , ohf.[OH Opt Out Count]
 , ohf.[Banker Count]
-, datediff.FirstSMFCInboundTexttoBankerOutboud
-, datediff.AllocationtoBankerOutboud
-
-
+, datediff.FirstSMFCInboundTexttoBankerOutbound
+, datediff.AllocationtoBankerOutbound
 
 
 --select * from #final1 where loannumber = '3539073051'
@@ -520,7 +515,7 @@ b.LoanNumber
 ,b.CallStartDateTime
 ,b.CallEndDateTime
 ,b.CallEndEvent
-, case when b.callstartdatetime < l.OutboundTextDate then 1 else 0 end as CallsBeforeTextFlag
+--, case when b.callstartdatetime < l.OutboundTextDate then 1 else 0 end as CallsBeforeTextFlag
 
 into #calls
 from Reporting.MB.CallEventRollup_BLD b
@@ -528,8 +523,7 @@ inner join #textbase f on f.LoanNumber = b.LoanNumber
 left join #Final1 l on l.LoanNumber = b.loannumber
 
 where IsFoundation = 1
-and cast(b.callstartdatetime as date ) = cast(l.outboundtextdate as date)
-
+--and cast(b.callstartdatetime as date ) = cast(l.outboundtextdate as date)   -- just calls occuring on text date
 
 
 --sum when each call was transferred or answered
@@ -546,9 +540,9 @@ group by b.loannumber
 --------------------------------------------------------------------------
 Drop Table if exists bisandboxwrite.dbo.sthom_texting_metrics
 Select
-
+l.LoanNumber
 --l.LeadSubmittedDate as LeadCreateDateTime
- l.LeadSubmittedDateDate as LeadCreateDate
+, l.LeadSubmittedDateDate as LeadCreateDate
 , l.OpportunityGroup as [Opportunity Group]
 , dd.[Month And Year Name] as [Lead Create Month]
 , dd.MonthSK
@@ -557,18 +551,18 @@ Select
 , CASE WHEN dd.[Business Day Flag] = 'Y'  THEN 1 ELSE 0 END  as BusDayFlag
 , dd.[Business Day Flag]
 , c.TransferredFlag as [Transferred to Banker Flag]
-, totalcalls.CallsBeforeTextFlag
+--, totalcalls.CallsBeforeTextFlag
 , round(avg(cast(percenttexted as float)),4) as PercentTexted
 , round(avg(cast(allocatedflg as float)),4) as NetLeadtoAllocate
 , sum([Pre-allocate Outbound Texts]) as [Pre-Allocate Outbound Texts]
 , sum([Pre-Allocate Inbound Texts]) as [Pre-Allocate Inbound Texts]    ---just exclude weblead
 , sum(TextKeyWordFlag) as [Text Key Word Count]
-, sum(HelpFlag) as [Help Stop Count]
+, sum(HelpFlag) as [Help Count]
 , sum(OptOutFlag) as [SFMC Opt Out Count]
-, Sum(FirstSMFCInboundTexttoBankerOutboud) as SumMinutesBetweenTextandBanker
+, Sum(FirstSMFCInboundTexttoBankerOutbound) as SumMinutesBetweenTextandBanker
 , Sum(outtoindatediff) as SumOutboundtoInboundSFMCMin
 , SUM(AllocationtoInboundDateDiff) SumInboundtoAllocationMin
-, sum(AllocationtoBankerOutboud) as SumAllocationtoBankerOutbound
+, sum(AllocationtoBankerOutbound) as SumAllocationtoBankerOutbound
 , sum([OH Inbound Count] ) as [OH Inbound Sum]
 , sum([OH Outbound Count] ) as [OH Outbound Sum]
 , sum([OH Opt Out Count] ) as [OH Opt Out Sum]
@@ -598,17 +592,18 @@ left join #calls2 c on c.LoanNumber = l.LoanNumber
 
 outer apply(
             select
-			d.CallsBeforeTextFlag
-            ,count(d.LoanNumber) as TotalCalls
+			--d.CallsBeforeTextFlag,
+            count(d.LoanNumber) as TotalCalls
             from #calls d
             where 1=1
             and d.LoanNUmber = l.LoanNumber
-			group by d.CallsBeforeTextFlag
+			--group by d.CallsBeforeTextFlag
             )TotalCalls
 
 
 group by
- l.LeadSubmittedDateDate
+l.LoanNumber
+,l.LeadSubmittedDateDate
 , l.OpportunityGroup 
 , dd.[Month And Year Name] 
 , dd.MonthSK
@@ -617,9 +612,11 @@ group by
 , CASE WHEN dd.[Business Day Flag] = 'Y'  THEN 1 ELSE 0 END  
 , dd.[Business Day Flag]
 , c.TransferredFlag
-, totalcalls.CallsBeforeTextFlag
+--, totalcalls.CallsBeforeTextFlag
 
 
+
+select * from bisandboxwrite.dbo.sthom_texting_metrics where [Text Key Word Count] > 0
 
 Drop table if exists bisandboxwrite.dbo.sthom_texting_metrics_hourly2
 
@@ -662,7 +659,7 @@ OpportunityGroup
 , sum(TextKeyWordFlag) as [Text Key Word Count]
 , sum(HelpFlag) as [Help Stop Count]
 , sum(OptOutFlag) as [Opt Out Count]
-, AVG(FirstSMFCInboundTexttoBankerOutboud) as AverageMinutesBetweenTextandBanker
+, AVG(FirstSMFCInboundTexttoBankerOutbound) as AverageMinutesBetweenTextandBanker
 , sum([OH Inbound Count] ) as [OH Inbound Sum]
 , sum([OH Outbound Count] ) as [OH Outbound Sum]
 , sum([OH Opt Out Count] ) as [OH Opt Out Sum]
@@ -676,14 +673,16 @@ Group by OpportunityGroup
 select top 100 * from #final1 where
 textkeywordflag > 0
 
+select count( distinct loannumber) from #final1
 
-
+drop table if exists #test
 Select 
-f.OpportunityGroup
+f.LoanNumber
+,f.OpportunityGroup
 , totalcalls.CallsBeforeTextFlag
 , count(f.loannumber) as TotalLoans
 , sum(TotalCalls.TotalCalls) as TotalCalls
-
+into #test
 From #final1 f
 outer apply(
             select
@@ -696,9 +695,30 @@ outer apply(
             )TotalCalls
 
 Group by 
-OpportunityGroup
+
+, OpportunityGroup
 , totalcalls.CallsBeforeTextFlag
 
 
+
+Select 
+f.OpportunityGroup
+, count(f.loannumber) as TotalLoans
+, sum(TotalCalls.TotalCalls) as TotalCalls
+
+From #final1 f
+outer apply(
+            select
+
+            count(d.LoanNumber) as TotalCalls
+            from #calls d
+            where 1=1
+            and d.LoanNUmber = f.LoanNumber
+
+            )TotalCalls
+
+Group by 
+
+ OpportunityGroup
 
 
