@@ -28,7 +28,8 @@ FROM src.salesforce.opportunitieschangedevent SC WITH (NOLOCK)
 where 1=1
     and eventreason = 'Lead Submitted' 
     and opportunitygroup in ('Core Refinance Web Leads Text', 'Core Refinance Web Leads Text Control')
-    and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20', '2023-12-21', '2023-12-25', '2023-12-26', '2023-12-27', '2023-12-28', '2024-01-01')
+   and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20', '2023-12-21', '2023-12-25', '2023-12-26', '2023-12-27', '2023-12-28', '2024-01-01', '2024-01-02')
+	    --and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20', '2023-12-21')
     and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
 
 
@@ -49,7 +50,6 @@ INTO #SFMCTempOutbound
 from SRC.SFMC.SmsMessageTrackingExtractView s
     INNER JOIN #textbase TB ON TB.LoanNumber = s.LoanNumber 
 
-
 where 1=1
 and dateadd(hour, 1, s.ActionDateTime) <= tb.AllocationDate --- pre-allocate texts only
 and dateadd(hour, 1 , s.ActionDateTime) >= '2023-12-15' --- only look at texts sent after pilot start date
@@ -58,7 +58,6 @@ and MessageText like '%Rocket Mortgage: Phone calls not your thing? Respond TEXT
 and Delivered = 'true'
 
 CREATE NONCLUSTERED INDEX I_XD ON #SFMCTempoutbound (loannumber, Mobile)
-
 
 -----------------------------------------------------------------------------------
 
@@ -88,7 +87,6 @@ loannumber
 , Mobile
 , OpportunityGroup
 
-
 INTO #InboundPrebase
 
 from #SFMCTempoutbound
@@ -99,7 +97,6 @@ DROP TABLE IF EXISTS #PEIDBASE1
 Select 
 TB.*
 , peid.Mobile
-
 
 INTO #PEIDBase1
 
@@ -116,7 +113,6 @@ from #textbase TB
     )PEID
 
 
-
 drop table if exists #PEIDBASE
 select
 p.*
@@ -125,10 +121,8 @@ p.*
 , TextInboundFlag.MessageText
 , TextInboundFlag.OutboundTextDate
 
-
 into #PEIDBASE
  from #PEIDBase1 P
-
 
 OUTER APPLY(
     Select top 1
@@ -397,6 +391,8 @@ T.Loannumber
 , datediff.AllocationtoBankerOutbound
 
 
+--select top 1000 * from #final1 where PercentTexted > 0
+
 --select * from #final1 where loannumber = '3539073051'
 
 --select * from SRC.SFMC.SmsMessageTrackingExtractView where mobile = '13076795851' order by ActionDateTime
@@ -542,6 +538,7 @@ Drop Table if exists bisandboxwrite.dbo.sthom_texting_metrics
 Select
 l.LoanNumber
 --l.LeadSubmittedDate as LeadCreateDateTime
+, Case when PercentTexted = 1 then 'Text Treatment' else 'No Text Treatment' end as [Texted Flag]
 , l.LeadSubmittedDateDate as LeadCreateDate
 , l.OpportunityGroup as [Opportunity Group]
 , dd.[Month And Year Name] as [Lead Create Month]
@@ -552,7 +549,7 @@ l.LoanNumber
 , dd.[Business Day Flag]
 , c.TransferredFlag as [Transferred to Banker Flag]
 --, totalcalls.CallsBeforeTextFlag
-, round(avg(cast(percenttexted as float)),4) as PercentTexted
+--, round(avg(cast(percenttexted as float)),4) as PercentTexted
 , round(avg(cast(allocatedflg as float)),4) as NetLeadtoAllocate
 , sum([Pre-allocate Outbound Texts]) as [Pre-Allocate Outbound Texts]
 , sum([Pre-Allocate Inbound Texts]) as [Pre-Allocate Inbound Texts]    ---just exclude weblead
@@ -602,6 +599,7 @@ outer apply(
 
 group by
 l.LoanNumber
+, case when PercentTexted = 1 then 'Text Treatment' else 'No Text Treatment' end
 ,l.LeadSubmittedDateDate
 , l.OpportunityGroup 
 , dd.[Month And Year Name] 
@@ -622,6 +620,7 @@ Drop table if exists bisandboxwrite.dbo.sthom_texting_metrics_hourly2
 Select 
 loannumber
 , OpportunityGroup
+, Case when PercentTexted = 1 then 'Text Treatment' else 'No Text Treatment' end as [Texted Flag]
 , LeadSubmittedDateDate as LeadSubmittedDate
 , cast(allocationdate as date) as Date_of_allocation
 , cast(min_inbound_date as date) as Date_of_Text
@@ -646,7 +645,7 @@ from #Final1
 
 
 Select 
-OpportunityGroup
+PercentTexted
 , count(loannumber) as TotalLoans
 , round(avg(cast(percenttexted as float)),4) as PercentTexted
 , round(avg(cast(allocatedflg as float)),4) as NetLeadtoAllocate
@@ -663,60 +662,13 @@ OpportunityGroup
 
 From #final1 f
 
-Group by OpportunityGroup
+Group by PercentTexted
+
+
 
 
 select top 100 * from #final1 where
 textkeywordflag > 0
 
 
-drop table if exists #test
-Select 
-f.LoanNumber
-, f.OpportunityGroup
-, count(f.loannumber) as TotalLoans
-, sum(TotalCalls.TotalCalls) as TotalCalls
---into #test
-From #final1 f
-outer apply(
-            select
-			count(case when CallsBeforeTextFlag = 1 then 
-			
-			d.CallsBeforeTextFlag
-            , count(d.LoanNumber) as TotalCalls
-            from #calls d
-            where 1=1
-            and d.LoanNUmber = f.LoanNumber
-			group by d.CallsBeforeTextFlag
-            )TotalCalls
 
-Group by 
- OpportunityGroup
- , f.LoanNumber
-
-
- Select
- LoanNumber
- , OpportunityGroup
- , count(*) from #test group by  LoanNumber
- , OpportunityGroup having count(*) > 1
-
- select * from #test where loannumber = '3538647900'
-
-
- Select count(loannumber), count(distinct loannumber) from #test
-
-
-
- Select
- --loannumber
-
-  Sum(case when callsbeforetextflag = 1 then 1 else 0 end) as callbeforetextsum
-  , Sum(case when callsbeforetextflag = 0 then 1 else 0 end) as callaftertextsum
-
- from #calls
- --group by loannumber
- order by callbeforetextsum desc
-
- 
- top 100 * from #calls
