@@ -19,24 +19,30 @@ Select
     , OpportunityGroup
     , isnull(baf.StartDateTime, '2099-12-31') as AllocationDate
     , CASE WHEN (BAF.Allocationsequence = 1) THEN 1 ELSE 0 END as Allocated
+	
 
 into #textbase 
 FROM src.salesforce.opportunitieschangedevent SC WITH (NOLOCK)
         LEFT JOIN biloan.dbo.BankerAllocationFact baf on baf.loannumber = SC.LoanNumber and baf.allocationsequence = 1
-
+        left join qlods..datedim dd on dd.DateID = convert(varchar(8), cast(dateadd(hour,-5,messagesenttimestamp) as date), 112)
+        -- Omits All Leads Created The Day Before a Holiday
+        left join qlods..datedim h on h.HolidayFlg = 1 
+                                        and convert(varchar(8), cast(dateadd(day,-1,h.Date) as date), 112) 
+                                        = convert(varchar(8), cast(dateadd(hour,-5,messagesenttimestamp) as date), 112)
 
 where 1=1
     and eventreason = 'Lead Submitted' 
     and opportunitygroup in ('Core Refinance Web Leads Text', 'Core Refinance Web Leads Text Control')
-   and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20', '2023-12-21', '2023-12-25', '2023-12-26', '2023-12-27', '2023-12-28', '2024-01-01', '2024-01-02')
-	    --and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20', '2023-12-21')
+   and cast(dateadd(hour,-5,messagesenttimestamp) as date) > '2023-12-13' 
+--and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20', '2023-12-21', '2023-12-25', '2023-12-26', '2023-12-27', '2023-12-28', '2024-01-01', '2024-01-02', '2024-01-03') 
     and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
-
+    and dd.DayOfWeekKey not in (6, 7) 
+    and h.DateID is null
+	and cast(dateadd(hour,-5,messagesenttimestamp) as date) < dateadd(day, -1 , cast(getdate() as date))
 
 -----------------------------------------------------------------------------------
 --- Texting Temp Tables
 --- Grab all loans from base that gor an outbound text
-
 
 DROP TABLE IF EXISTS #SFMCTEmpOutbound
 Select s.*
@@ -137,11 +143,13 @@ OUTER APPLY(
     WHERE 1=1
     and  (sms.MessageText like '%Text%' or sms.MessageText like 'Help' or sms.MessageText like '%Stop%' or sms.MessageText like '%Optout%' or sms.MessageText like '%Opt out%')
     and IPB.Mobile = p.mobile
-	and so.OutboundTextDate <= dateadd(hour, 1, sms.ActionDateTime)
-	and Datediff(minute, so.OutboundTextDate, dateadd(hour, 1, sms.ActionDateTime)) <= 1440
+	and so.OutboundTextDate <= dateadd(hour, 1, sms.ActionDateTime) ---response after outbound text
+	and Datediff(minute, so.OutboundTextDate, dateadd(hour, 1, sms.ActionDateTime)) <= 1440     -- client  not texted after 24 hours
 
 	order by sms.ActionDateTime asc
     )TextInboundFlag
+
+
 
 -----------------------------------------------------------------------------------
 
@@ -391,20 +399,23 @@ T.Loannumber
 , datediff.AllocationtoBankerOutbound
 
 
+select * from #final1 where optoutflag = 1
+
+
 --select top 1000 * from #final1 where PercentTexted > 0
 
---select * from #final1 where loannumber = '3539073051'
+select * from #final1 where loannumber = '3539336619'
 
---select * from SRC.SFMC.SmsMessageTrackingExtractView where mobile = '13076795851' order by ActionDateTime
-
+select * from SRC.SFMC.SmsMessageTrackingExtractView where mobile = '16622889482' order by ActionDateTime
 
 --SELECT M.starttime, M.Origin, C.message--,  M.*  
 --FROM Reporting.SalesForce.vwOurHouseMessagingSession M
 --    LEFT JOIN Reporting.SalesForce.vwOurHouseConversationEntry C ON C.conversationid = M.messagingsession_sk
 --WHERE 1=1
---    AND loannumber_c = '3539073051'
+--    AND loannumber_c = '3539335100'
 --    AND message NOT IN ('ChatbotEstablished', 'ChatbotEndedChatByAction')
 --ORDER BY M.starttime
+
 -------------------------------------------------------------------
 DROP TABLE IF EXISTS #milestones
 SELECT
@@ -643,11 +654,10 @@ from #Final1
 
 ---- aggregation------
 
-
 Select 
 PercentTexted
-, count(loannumber) as TotalLoans
-, round(avg(cast(percenttexted as float)),4) as PercentTexted
+, count(f.loannumber) as TotalLoans
+--, round(avg(cast(percenttexted as float)),4) as PercentTexted
 , round(avg(cast(allocatedflg as float)),4) as NetLeadtoAllocate
 , sum([Pre-allocate Outbound Texts]) as [Pre-Allocate Outbound Texts]
 , sum([Pre-Allocate Inbound Texts]) as [Pre-Allocate Inbound Texts]
@@ -659,12 +669,22 @@ PercentTexted
 , sum([OH Outbound Count] ) as [OH Outbound Sum]
 , sum([OH Opt Out Count] ) as [OH Opt Out Sum]
 , sum(case when [OH Inbound Count] is not null then 1 else 0 end ) as sessionscreated
+--, count(m.AllocationDate2) as TotalAllocations
 
 From #final1 f
+--left join #milestones2 m on m.LoanNumber = f.LoanNumber
 
 Group by PercentTexted
 
 
+
+select 
+LoanNumber, Mobile
+
+from #final1
+
+where OpportunityGroup = 'Core Refinance Web Leads Text' 
+and PercentTexted = 0
 
 
 select top 100 * from #final1 where
