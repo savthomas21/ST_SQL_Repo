@@ -1,0 +1,338 @@
+
+
+---adhoc request
+
+
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+/*lookback for each run, defined by user*/	
+Declare @Startdate date = '2023-12-01'
+DECLARE @enddate date = getdate()
+
+
+DECLARE @Startdateid INT = convert(varchar,@Startdate,112)
+DECLARE @Enddateid   INT = convert(varchar,@Enddate,112)
+
+/*metrics_base Logic*/
+
+DROP TABLE IF EXISTS #Leadsold
+Select
+LID.LoanNumber
+, LID.LoanNumberID
+, lid.loanidentifierdimsk
+	, l.FName
+	, l.LName
+	, l.Email
+	, l.DayPhoneID
+	, l.EvePhoneID
+	, l.Address
+	, l.city
+	, l.state
+	, l.Zip
+, lm.EventDateDimId as LeadCreateDateID
+, cast(lm.EventDateTime as date) as LeadCreateDate
+, lm.EventDateTime
+, LB.BusinessChannel
+, LG.UPEMLeadGrade as LeadGrade
+, ld.DeliveryMechanism as AllocationMethod
+, case when (l.LoanPurposeID = 7) then 'Refinance' else 'Purchase' end as LoanPurpose
+,EventName
+
+
+INTO #Leadsold
+From EDW.Loan.LoanMajorMilestoneFact LM WITH (NOLOCK)
+
+INNER JOIN EDW.dimensions.loanmilestonedim lmd WITH (NOLOCK) on lmd.loanmilestonesk = lm.loanmilestonesk 
+    and lmd.groupid = 12 --- Net Leads
+INNER JOIN EDW.Dimensions.LoanIdentifierDim LID WITH (NOLOCK) ON LID.LoanIdentifierDimSK = LM.LoanIdentifierDimSK 
+    and LID.IsCurrentRecordInd = 1
+
+
+LEFT join integrate.loanorigination.loanbusinesschannelclassification LB WITH (NOLOCK) ON LID.Loanidentifierdimsk = LB.LoanIdentifierDimSK  
+LEFT JOIN EDW.Dimensions.LoanAllocationAttributesDim LG WITH (NOLOCK) ON LG.LoanIdentifierDimSK = lid.LoanIdentifierDimSK
+LEFT join qlods.dbo.lola l WITH (NOLOCK) on l.JacketNumber = lid.LoanNumber
+left join qlods.dbo.webcodedim ld WITH (NOLOCK) on ld.webcodeid = l.leaddesignationid
+
+
+Where 1=1
+and lm.eventdatedimid between @startdateid and @Enddateid
+and lm.IsCurrentRecordInd = 1
+and BusinessChannel in ('Core Refinance')
+
+
+CREATE NONCLUSTERED INDEX I_XD ON #Leadsold (Loannumber)
+
+
+
+select *, BusinessChannel from EDW.Loan.LoanMajorMilestoneFact lm
+INNER JOIN EDW.dimensions.loanmilestonedim lmd WITH (NOLOCK) on lmd.loanmilestonesk = lm.loanmilestonesk 
+    and lmd.groupid = 12 --- Net Leads
+INNER JOIN EDW.Dimensions.LoanIdentifierDim LID WITH (NOLOCK) ON LID.LoanIdentifierDimSK = LM.LoanIdentifierDimSK 
+    and LID.IsCurrentRecordInd = 1
+	LEFT join integrate.loanorigination.loanbusinesschannelclassification LB WITH (NOLOCK) ON LID.Loanidentifierdimsk = LB.LoanIdentifierDimSK  
+
+where lid.loannumber = '3538065400'
+
+
+select * from integrate.loanorigination.loanbusinesschannelclassification where LoanIdentifierDimSK = '260113299'
+
+---------------------------------------------------------------------
+--------------------------------------------------------------------------
+
+--- Lance's Additions for de-duping
+ 
+DROP TABLE IF EXISTS #Dupe
+ 
+Select l.*
+,dupe.loans
+ 
+INTO #Dupe
+ 
+from #leadsold l
+ 
+Outer Apply(
+Select count(1) as loans
+ 
+from #leadsold le
+ 
+where le.LoanIdentifierDimSK = l.LoanIdentifierDimSK
+)Dupe
+ 
+ 
+CREATE NONCLUSTERED INDEX I_XD ON #DUPE (Loannumber)
+
+DROP TABLE IF EXISTS #Leads
+Select *
+ 
+INTO #leads
+ 
+FROM #Dupe
+ 
+ 
+Where 1=1
+and 
+(
+(eventname = 'Rocket Net Leads' and loans = 1)
+OR (eventname = 'Our House Lead Object Created' and loans = 1)
+OR (eventname = 'Net Leads' and loans >= 1))
+
+CREATE NONCLUSTERED INDEX I_XD ON #Leads (Loannumber)
+
+
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS #leads2
+SELECT
+l.LoanNumber
+,l.LoanNumberID
+,l.LoanIdentifierDimSK 
+	, l.FName
+	, l.LName
+	, l.Email
+	, l.DayPhoneID
+	, l.EvePhoneID
+	, l.Address
+	, l.city
+	, l.state
+	, l.Zip
+,l.LeadCreateDateID
+,l.LeadCreateDate 
+, DATEDIFF(day, l.LeadCreateDate, GETDATE()) as datediff
+,l.EventDateTime
+,l.BusinessChannel
+,l.LeadGrade
+, l.AllocationMethod
+,l.LoanPurpose 
+,CASE WHEN MKT.LeadIDType=2 THEN 'Rocket Mortgage'
+								  ELSE ISNULL(CMD.CreationTypeName,'Other')
+	   END AS CreationTypeName
+
+INTO #leads2
+FROM #Leads l
+LEFT join EDW.Marketing.LeadInteractionFact mkt WITH (NOLOCK) on mkt.leadid = l.LoanNumberID
+LEFT JOIN EDW.Dimensions.LeadCreationTrackingMappingDim LCTMD WITH(NOLOCK) ON LCTMD.TrackingValue=MKT.LeadTypeCode
+LEFT JOIN EDW.Dimensions.LeadCreationMethodDim CMD (NOLOCK) ON LCTMD.LeadCreationMethodSK = CMD.LeadCreationMethodSK
+
+CREATE NONCLUSTERED INDEX I_XD ON #Leads2 (Loannumber)
+
+
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+--Allocations table inner joining on base
+DROP TABLE IF EXISTS #Allocations
+Select 
+LID.LoanNumber
+, LID.LoanNumberID
+ ,lid.loanidentifierdimsk
+--, lm.EventDateDimId as LeadCreateDateID
+, min(LM.Eventdatetime) as AllocateDate
+INTO #Allocations
+From EDW.Loan.LoanMajorMilestoneFact LM WITH (NOLOCK)
+INNER JOIN EDW.dimensions.loanmilestonedim lmd WITH (NOLOCK) on lmd.loanmilestonesk = lm.loanmilestonesk 
+    and lmd.groupid = 7 --- Allocated
+INNER JOIN EDW.Dimensions.LoanIdentifierDim LID WITH (NOLOCK) ON LID.LoanIdentifierDimSK = LM.LoanIdentifierDimSK 
+    and LID.IsCurrentRecordInd = 1
+
+INNER JOIN #Leads2 Le ON Le.LoanIdentifierDimSK = LID.LoanIdentifierDimSK
+
+where 1=1
+and lm.IsCurrentRecordInd = 1
+and lm.EventDateTime >= LE.EventDateTime
+
+group by
+LID.LoanNumber
+, LID.LoanNumberID
+ ,lid.loanidentifierdimsk
+
+CREATE NONCLUSTERED INDEX I_XD ON #Allocations (Loannumber)
+
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+DROP TABLE IF EXISTS #callfact
+SELECT
+	cf.JacketNumber
+	, cf.GCID
+	, cf.StartDateID
+	,cast(cf.StartDateTime as date) as calldate
+INTO #callfact
+FROM bicalldata.dbo.callfact Cf
+INNER JOIN #leads2 d ON D.LoanNumberID = cf.JacketNumber
+WHERE cf.StartDateTime between d.leadcreatedate and dateadd(day,15,d.LeadCreateDate)
+
+CREATE NONCLUSTERED INDEX I_XD ON #callfact (jacketnumber)
+
+
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+
+	---case when allocation date is null and dials >0 then flag 
+	--leads at least 10 days old
+	--datediff today and lead create day > 10
+
+DROP TABLE IF EXISTS #final2
+SELECT
+	 l.LoanNumber
+	, l.FName
+	, l.LName
+	, l.Email
+	, l.DayPhoneID
+	, l.EvePhoneID
+	, l.Address
+	, l.city
+	, l.state
+	, l.Zip
+	,  l.LeadCreateDate
+	, l.LeadCreateDateID
+	, l.LoanPurpose
+	, l.BusinessChannel
+	, l.CreationTypeName
+	, l.LeadGrade
+	, l.AllocationMethod
+	, cf.GCID
+	, SUM(totalcalls.TotalCalls) as TotalDials
+	, sum(case when TotalDay0Calls.TotalDay0Calls = 0 then 0 else 1 end) as TotalDialsonDay0
+
+
+into #final2
+FROM #leads2 l
+Left JOIN #Allocations a with (nolock) on a.LoanIdentifierDimSK = l.LoanIdentifierDimSK
+LEFT JOIN Semantic.Dimensions.vw_DateDim dd with (nolock) on dd.DateSK = l.LeadCreateDateID
+left join #callfact cf on cf.JacketNumber = l.LoanNumberID
+
+outer apply(
+            select
+            count(c.JacketNumber) as TotalCalls
+            from #callfact c
+            where 1=1
+            and c.JacketNumber = l.LoanNumberID
+            )TotalCalls
+
+outer apply(
+            select
+            count(c.JacketNumber) as TotalDay0Calls
+            from #callfact c
+            where 1=1
+            and c.JacketNumber = l.LoanNumberID
+            and c.StartDateID = l.LeadCreateDateID
+            )TotalDay0Calls
+
+where l.LoanNumber is not null 
+and l.CreationTypeName in( 'Web' , 'Lead Buy')
+and a.AllocateDate is null 
+--and l.datedif > 10
+
+GROUP by 
+	 l.LoanNumber
+	, l.FName
+	, l.LName
+	, l.Email
+	, l.DayPhoneID
+	, l.EvePhoneID
+	, l.Address
+	, l.city
+	, l.state
+	, l.Zip
+	,  l.LeadCreateDate
+	, l.LeadCreateDateID
+	, l.LoanPurpose
+	, l.BusinessChannel
+	, l.CreationTypeName
+	, l.LeadGrade
+	, l.AllocationMethod
+	, cf.GCID
+
+
+	select * from #final2
+	----------------------------------------
+
+DROP TABLE IF EXISTS #Lolatransfactall 
+Select
+ltf.jacketnumber
+, l.Loannumber
+, l.FName
+	, l.LName
+	, l.Email
+	, l.DayPhoneID
+	, l.EvePhoneID
+	, l.Address
+	, l.city
+	, l.state
+	, l.Zip
+--, ltf.statussequence
+, ltf.dateid
+,dd.Date
+--, ltf.TimeID
+--, ltf.LoanPoolHistoryFactID
+--, ltf.LeadDesignationID
+--, ltf.UniqueStatusID
+, l.LoanPurpose
+INTO #Lolatransfactall
+FROM qlods.dbo.lolatransfact ltf WITH (NOLOCK)
+INNER JOIN #leads2 l ON l.LoanNumber = LTF.JacketNumber
+left join Semantic.Dimensions.vw_DateDim dd on dd.DateSK = ltf.DateID
+
+WHERE 1=1
+and uniquestatusid IN 
+                    ( 
+					--1150 --removed from pem
+                    --, 113  --marked as bogus
+                    --, 4756 --blank
+                    --, 127  --client opt out
+                    --, 678  --New LD assigned
+                    --, 100  --Auto denied in lola
+                     4405 --Cannon Call Client number was bad
+                    --, 1148 --non-responsive client removed from pem
+                    --, 4407 --cannon call client number was busy
+                    --, 4406 --cannon call number failed to dial
+                    --, 4348 --Spanish Flag
+                    )
+
+and l.loanpurpose = 'Refinance'
+
+
+
+
+select * from #Lolatransfactall 
+
+
