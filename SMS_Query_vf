@@ -157,7 +157,7 @@ OUTER APPLY(
     and  (sms.MessageText like '%Text%' or sms.MessageText like 'Help' or sms.MessageText like '%Stop%' or sms.MessageText like '%Optout%' or sms.MessageText like '%Opt out%')
     and IPB.Mobile = p.mobile
 	and so.OutboundTextDate <= dateadd(hour, 1, sms.ActionDateTime)
-	and Datediff(minute, so.OutboundTextDate, dateadd(hour, 1, sms.ActionDateTime)) <= 4320
+	and Datediff(minute, so.OutboundTextDate, dateadd(hour, 1, sms.ActionDateTime)) <= 1440
 
 	order by sms.ActionDateTime asc
     )TextInboundFlag
