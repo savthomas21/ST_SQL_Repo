@@ -1,13 +1,13 @@
 USE [BISandboxWrite]
 GO
-/****** Object:  StoredProcedure [dbo].[sthom_SMS_Pilot_SP]    Script Date: 2/13/2024 10:32:00 AM ******/
+/****** Object:  StoredProcedure [dbo].[sthom_SMS_Pilot_SP_2]    Script Date: 2/13/2024 10:32:09 AM ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
 
 
-ALTER   PROCEDURE [dbo].[sthom_SMS_Pilot_SP]
+ALTER   PROCEDURE [dbo].[sthom_SMS_Pilot_SP_2]
 
 AS
 
@@ -31,26 +31,30 @@ Select
     , OpportunityGroup
     , isnull(baf.StartDateTime, '2099-12-31') as AllocationDate
     , CASE WHEN (BAF.Allocationsequence = 1) THEN 1 ELSE 0 END as Allocated
-	
+    --, ltc.WebCode as LeadTypeCode
 
 into #textbase 
 FROM src.salesforce.opportunitieschangedevent SC WITH (NOLOCK)
-        LEFT JOIN biloan.dbo.BankerAllocationFact baf on baf.loannumber = SC.LoanNumber and baf.allocationsequence = 1
+        left join EDW.dimensions.loanidentifierdim LDD ON LDD.LoanNumber = sc.LoanNumber
+        LEFT JOIN biloan.dbo.BankerAllocationFact baf on baf.loannumber = LDD.LoanNumberID and baf.allocationsequence = 1
         left join qlods..datedim dd on dd.DateID = convert(varchar(8), cast(dateadd(hour,-5,messagesenttimestamp) as date), 112)
         -- Omits All Leads Created The Day Before a Holiday
         left join qlods..datedim h on h.HolidayFlg = 1 
                                         and convert(varchar(8), cast(dateadd(day,-1,h.Date) as date), 112) 
                                         = convert(varchar(8), cast(dateadd(hour,-5,messagesenttimestamp) as date), 112)
-
+        
+        left join qlods.dbo.lola l on l.JacketNumber = LDD.LoanNumber
+        left join qlods.dbo.webcodedim ld WITH (NOLOCK) on ld.webcodeid = baf.leaddesignationid  
+        left join qlods.dbo.webcodedim ltc on ltc.WebCodeID = l.WebReferrerID
+        
 where 1=1
     and eventreason = 'Lead Submitted' 
     and opportunitygroup in ('Core Refinance Web Leads Text', 'Core Refinance Web Leads Text Control')
    and cast(dateadd(hour,-5,messagesenttimestamp) as date) > '2023-12-13' 
---and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17', '2023-12-18', '2023-12-19', '2023-12-20', '2023-12-21', '2023-12-25', '2023-12-26', '2023-12-27', '2023-12-28', '2024-01-01', '2024-01-02', '2024-01-03') 
     and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
     and dd.DayOfWeekKey not in (6, 7) 
     and h.DateID is null
-	and cast(dateadd(hour,-5,messagesenttimestamp) as date) < dateadd(day, -1 , cast(getdate() as date))
+    and cast(dateadd(hour,-5,messagesenttimestamp) as date) < dateadd(day, -1 , cast(getdate() as date))
 
 
 -----------------------------------------------------------------------------------
@@ -74,10 +78,11 @@ and dateadd(hour, 1, s.ActionDateTime) <= tb.AllocationDate --- pre-allocate tex
 and dateadd(hour, 1 , s.ActionDateTime) >= '2023-12-15' --- only look at texts sent after pilot start date
 and datediff(day,LeadSubmittedDate, dateadd(hour, 1, s.ActionDateTime)) = 1
 --and (MessageText like '%Rocket Mortgage: Phone calls not your thing? Respond TEXT to start chatting with a home loan expert. Reply HELP for help, STOP to end text.%' or MessageText like '%Rocket Mortgage: See how much cash you could get from your home. Reply TEXT to text with a Home Loan Expert. Reply HELP for help, STOP to end texts.%')
-and Delivered = 'true'
 and name like '%SMS_L2A_Refi_Day1_AutoAllocateOurHouse%'
+and Delivered = 'true'
 
 CREATE NONCLUSTERED INDEX I_XD ON #SFMCTempoutbound (loannumber, Mobile)
+
 
 -----------------------------------------------------------------------------------
 
@@ -341,8 +346,8 @@ from #PEIDBASE  pb
 ----------------------------------------------------------------------------------
 --Declare @LeadSubmittedStartDate Date = '2023-12-11'
 
---select top 100 * from #final1 where
---textkeywordflag > 0
+--select  * from #final1 where
+--textkeywordflag > 0 order by leadsubmitteddate desc 
 
 DROP TABLE IF EXISTS #Final1
 Select 
