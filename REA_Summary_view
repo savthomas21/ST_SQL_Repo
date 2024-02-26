@@ -1,0 +1,184 @@
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+
+DROP TABLE IF EXISTS #reainfo
+        SELECT DISTINCT SRC.LoanNumber,
+		 COALESCE(agentcommonID, AgentCommonIDReal) AS 'FinalAgentCommonID',
+		 MIN(SRC.MessageDateTime) AS 'RealtorInfoDtTm'    --- getting time the first time agent was added to loan number
+        , rownum = ROW_NUMBER() OVER(PARTITION BY   SRC.LoanNumber ORDER BY MIN(SRC.MessageDateTime) ASC)  --- going to filter and get most recent agent added to loannumber
+        INTO #reainfo
+        from src.qtweet.buyerrealtorcontactchangedevent SRC    
+        Where 1=1    
+        AND SRC.MessageDateTime BETWEEN '2023-01-01' AND '2024-01-01'
+        and len(Contactname) >=1    
+        AND (LEN(SRC.cellphone) >= 9 OR LEN(src.workphone) >=9 OR LEN(src.contactname) >=5 OR LEN(src.EmailAddress) >=5)
+        AND EmailAddress <> ''
+        AND src.ContactName NOT IN ('none', 'N/A', 'n/a', 'N/a', 'tbd', 'tba', 'null', 'na', 'fsbo', 'name', 'nana', 'N A', 'tbt', 'tbde', 'temp', 'xx', 'N N', 'fill','na na', 'N/A N/A', 'No REA' 
+        ,'No Agent', 'No agent No Agent', 'no agent none', 'no realtor', 'Realtor Realtor', 'Realtor Name', 'tbd tbd no realtor', 'No Realtor - new con fsbo', 'No  realtor FSBO', 'No Representative')
+        GROUP BY SRC.LoanNumber, COALESCE(agentcommonID, AgentCommonIDReal)
+
+
+drop table if exists #base
+ 
+SELECT 
+l.[Loan Number], 
+lid.LoanIdentifierDimSK,
+l.[Closing DateTime Last],
+CASE WHEN l.[Closing DateTime Last] IS NOT NULL THEN 1 ELSE 0 END AS 'ClosingFlg'
+ , case when ltc.[Lead Type Code] in ('GENSOCPRFP', 'GENSOCPRFR', 'REFERROCPRFP', 'REFERSOCPRFR', 'BNKREFERSOCPRFP', 'BNKERREFERSOCPRFR') then 1 else 0 end as Non_REAOrganicFlag
+ , case when ltc.[Lead Type Code] in ( 'RBSGENSOCPRFP', 'RBSREFERSOCPRFP') then 1 else 0 end as REAReferredFlag
+ --, case when RH_connected.connected_sum >0  then 1 else 0 end as 'connected_to_RH_flg'
+ , RH_connected.connected_flg
+ , case when r.FinalAgentCommonID is not null then 1 else 0 end as 'HadAnAgentFlag'
+
+
+INTO #Base
+ 
+FROM [Semantic].[Loan].[vwLoanMilestoneHeader]								AS L  
+	INNER JOIN Integrate.LoanOrigination.LoanBusinessChannelClassification	AS lbcc WITH (NOLOCK)	ON lbcc.LoanIdentifierDimSK = L.LoanIdentifierDimSK		AND lbcc.businesschannel = 'Core Purchase'
+	INNER JOIN edw.Dimensions.LoanIdentifierDim								AS LID WITH (NOLOCK)	ON LID.LoanNumber = L.[Loan Number]						AND lid.IsCurrentRecordInd = 1  
+ 
+    LEFT JOIN Integrate.LoanOrigination.vwDirectToConsumerBusinessChannelHeader ltc ON ltc.LoanIdentifierDimSK = lid.LoanIdentifierDimSK  AND ltc.CurrentIndicator = 1
+
+	--LEFT JOIN biihr.ihrv2.vwloandim ld on l.[loan number] = ld.loannumber
+    --LEFT JOIN BIIHR.IHRv2.vwTransactionPipelineFact tpf ON ld.transactionid = tpf.srctransactionid 
+
+	Left join #reainfo r on r.LoanNumber = l.[Loan Number] and rownum = 1 and r.RealtorInfoDtTm < DATEADD(Day, 7, [PAL DateTime First])  ---last updated time for agent needs to be less than 7 days after the pal
+
+	Outer Apply (
+Select
+s.[Loan Number],
+case when sum(tpf.Connection) > 0 then 1 else 0 end as connected_flg
+
+FROM [Semantic].[Loan].[vwLoanMilestoneHeader] s 
+	LEFT JOIN biihr.ihrv2.vwloandim ld on s.[loan number] = ld.loannumber
+    LEFT JOIN BIIHR.IHRv2.vwTransactionPipelineFact tpf ON ld.transactionid = tpf.srctransactionid
+
+	--inner join #base b on b.[Loan Number] = s.[Loan Number] and b.[Closing DateTime Last] is not null
+where s.[loan number] = l.[loan number] 
+	group by s.[Loan Number]
+
+)RH_connected
+	
+
+WHERE 1=1
+	AND [Allocated DateTime First] between '2023-07-01' AND '2023-09-30'
+	AND [PAL DateTime First] IS NOT NULL
+	AND l.[Loan Number] IS NOT NULL
+
+group by 
+l.[Loan Number], 
+lid.LoanIdentifierDimSK,
+l.[Closing DateTime Last],
+CASE WHEN l.[Closing DateTime Last] IS NOT NULL THEN 1 ELSE 0 END 
+ , case when ltc.[Lead Type Code] in ('GENSOCPRFP', 'GENSOCPRFR', 'REFERROCPRFP', 'REFERSOCPRFR', 'BNKREFERSOCPRFP', 'BNKERREFERSOCPRFR') then 1 else 0 end 
+ , case when ltc.[Lead Type Code] in ( 'RBSGENSOCPRFP', 'RBSREFERSOCPRFP') then 1 else 0 end 
+  , RH_connected.connected_flg
+ , case when r.FinalAgentCommonID is not null then 1 else 0 end 
+
+
+
+
+drop table if exists #baseclosed
+ 
+SELECT 
+l.[Loan Number], 
+lid.LoanIdentifierDimSK,
+l.[Closing DateTime Last],
+CASE WHEN l.[Closing DateTime Last] IS NOT NULL THEN 1 ELSE 0 END AS 'ClosingFlg'
+ , case when ltc.[Lead Type Code] in ('GENSOCPRFP', 'GENSOCPRFR', 'REFERROCPRFP', 'REFERSOCPRFR', 'BNKREFERSOCPRFP', 'BNKERREFERSOCPRFR') then 1 else 0 end as Non_REAOrganicFlag
+ , case when ltc.[Lead Type Code] in ( 'RBSGENSOCPRFP', 'RBSREFERSOCPRFP') then 1 else 0 end as REAReferredFlag
+ , case when r.FinalAgentCommonID is not null then 1 else 0 end as 'HadAnAgentFlag'
+ , COALESCE(RHClosed.RHClosed, 0) as RHClosed
+
+
+INTO #Baseclosed
+ 
+FROM [Semantic].[Loan].[vwLoanMilestoneHeader]								AS L  
+	INNER JOIN Integrate.LoanOrigination.LoanBusinessChannelClassification	AS lbcc WITH (NOLOCK)	ON lbcc.LoanIdentifierDimSK = L.LoanIdentifierDimSK		AND lbcc.businesschannel = 'Core Purchase'
+	INNER JOIN edw.Dimensions.LoanIdentifierDim								AS LID WITH (NOLOCK)	ON LID.LoanNumber = L.[Loan Number]						AND lid.IsCurrentRecordInd = 1  
+ 
+    LEFT JOIN Integrate.LoanOrigination.vwDirectToConsumerBusinessChannelHeader ltc ON ltc.LoanIdentifierDimSK = lid.LoanIdentifierDimSK  AND ltc.CurrentIndicator = 1
+
+
+	Left join #reainfo r on r.LoanNumber = l.[Loan Number] and rownum = 1 and r.RealtorInfoDtTm < DATEADD(Day, 7, [Closing DateTime Last])  ---last updated time for agent needs to be less than 7 days after the pal
+	inner join #base b on b.[Loan Number] = l.[Loan Number] and b.[Closing DateTime Last] is not null
+
+
+Outer Apply (
+Select
+s.[Loan Number],
+tpf.Closed as RHClosed
+
+FROM [Semantic].[Loan].[vwLoanMilestoneHeader] s 
+	LEFT JOIN biihr.ihrv2.vwloandim ld on s.[loan number] = ld.loannumber
+    LEFT JOIN BIIHR.IHRv2.vwTransactionPipelineFact tpf ON ld.transactionid = tpf.srctransactionid
+
+	inner join #base b on b.[Loan Number] = s.[Loan Number] and b.[Closing DateTime Last] is not null
+
+where s.[loan number] = l.[loan number] and tpf.Closed = 1
+
+)RHClosed
+
+
+
+WHERE 1=1
+	AND [Allocated DateTime First] between '2023-07-01' AND '2023-09-30'
+	AND [PAL DateTime First] IS NOT NULL
+	AND l.[Loan Number] IS NOT NULL
+
+group by 
+l.[Loan Number], 
+lid.LoanIdentifierDimSK,
+l.[Closing DateTime Last],
+CASE WHEN l.[Closing DateTime Last] IS NOT NULL THEN 1 ELSE 0 END 
+ , case when ltc.[Lead Type Code] in ('GENSOCPRFP', 'GENSOCPRFR', 'REFERROCPRFP', 'REFERSOCPRFR', 'BNKREFERSOCPRFP', 'BNKERREFERSOCPRFR') then 1 else 0 end 
+ , case when ltc.[Lead Type Code] in ( 'RBSGENSOCPRFP', 'RBSREFERSOCPRFP') then 1 else 0 end 
+ , case when r.FinalAgentCommonID is not null then 1 else 0 end 
+  , COALESCE(RHClosed.RHClosed, 0)
+
+
+
+
+ Select 
+ case when Non_REAOrganicFlag = 1 then 'Non_REA_Organic'
+	when REAReferredFlag = 1 then 'REA_Referred'
+	when RHClosed = 1 then 'RH_Closed'
+	when HadAnAgentFlag = 1 then 'Has_Agent'
+	else 'no agent' end as 'REA_Relationship'
+,count([Loan number]) as total_pals
+, sum(ClosingFlg) as total_closings
+
+
+from #baseclosed
+group by 
+case when Non_REAOrganicFlag = 1 then 'Non_REA_Organic'
+	when REAReferredFlag = 1 then 'REA_Referred'
+	when RHClosed = 1 then 'RH_Closed'
+	when HadAnAgentFlag = 1 then 'Has_Agent'
+	else 'no agent' end 
+
+
+
+	
+
+Select 
+ case when Non_REAOrganicFlag = 1 then 'Non_REA_Organic'
+	when REAReferredFlag = 1 then 'REA_Referred'
+	when connected_flg = 1 then 'RH_Connected'
+	when HadAnAgentFlag = 1 then 'Has_Agent'
+	else 'no agent' end as 'REA_Relationship'
+,count([Loan number]) as total_pals
+, sum(ClosingFlg) as total_closings
+
+
+from #base 
+group by 
+case when Non_REAOrganicFlag = 1 then 'Non_REA_Organic'
+	when REAReferredFlag = 1 then 'REA_Referred'
+	when connected_flg = 1 then 'RH_Connected'
+	when HadAnAgentFlag = 1 then 'Has_Agent'
+	else 'no agent' end 
+
+
+	--select count([loan number]),  count(distinct [loan number])   from #Baseclosed
