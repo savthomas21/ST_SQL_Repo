@@ -1,0 +1,195 @@
+
+
+
+--Declare @Startdate date = '2023-12-11'
+
+
+--Declare @enddate date = '2023-12-17'
+
+
+
+--Drop table if exists #textbase
+--Select 
+--    SC.LoanNumber
+--    , cast(SC.loannumber as bigint) as jacketnumber
+--    , dateadd(hour,-5,messagesenttimestamp) as LeadSubmittedDate
+--    , cast(dateadd(hour,-5,messagesenttimestamp) as date) as LeadSubmittedDateDate
+--    , OpportunityGroup
+--    , isnull(baf.StartDateTime, '2099-12-31') as AllocationDate
+--    , CASE WHEN (BAF.Allocationsequence = 1) THEN 1 ELSE 0 END as Allocated
+
+--into #textbase 
+--FROM src.salesforce.opportunitieschangedevent SC WITH (NOLOCK)
+--        LEFT JOIN biloan.dbo.BankerAllocationFact baf on baf.loannumber = SC.LoanNumber and baf.allocationsequence = 1
+
+
+--where 1=1
+--    and eventreason = 'Lead Submitted' 
+--    and opportunitygroup in ('Core Refinance Web Leads Text', 'Core Refinance Web Leads Text Control')
+--    and cast(dateadd(hour,-5,messagesenttimestamp) as date) in ('2023-12-14' , '2023-12-17')
+--    and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
+
+
+
+
+drop table if exists #base
+select
+l.JacketNumber
+--, t.OpportunityGroup
+,cast(l.CreateDt as date)as LeadCreateDate
+,LEs.Homephone as ClientHomePhone
+,Les.CellularPhone as ClientCellPhone
+,LES.WorkPhone as ClientWorkPhone
+,CASE WHEN SourceString LIKE '%PromotionalSmsConsent>false%' then 0 else 1 end as SMSConsentFlag
+,ltc.webcode as LeadTypeCode
+into #base
+
+from qlods.dbo.lola l
+--inner join #textbase t on t.jacketnumber = l.JacketNumber
+LEFT JOIN SRCSubmissionEngine.Dbo.LeadSubmission LS ON LS.Loannumber = l.jacketnumber
+LEFT JOIN [SRCSubmissionEngine].[dbo].[Leads] Les ON Les.Leadid = ls.Leadid
+LEFT JOIN SRCSubmissionEngine.dbo.LeadProcessing LP ON LP.LeadId = LeS.LeadId and lp.LeadProcessingId = ls.LeadProcessingID
+left join qlods.dbo.webcodedim ltc on ltc.webcodeid = l.webreferrerid
+where 1=1
+and l.createdt between '2023-12-01' and '2023-12-31'
+and L.ISQLMSflg = 0
+and L.Stat9595DtID IS NULL
+and L.DeleteFlg = 0
+and L.ReverseFlg = 0
+
+--and ltc.WebCode in ('WHALF', 'WHALFRKT', 'WHLAFRKTCHATCTL', 'WHLAFCHATCTRL', 'WHALFCALC')
+
+
+
+-------------------------------------------------------------
+-------------------------------------------------------------
+drop table if exists #sms
+select
+sms.loannumber
+, count(1) as SMSTotal
+into #sms
+from SRC.SFMC.SmsMessageTrackingExtractView sms
+inner join #base bbb on bbb.jacketnumber = sms.loannumber
+where 1=1
+and sms.sent = 'TRUE'
+and sms.delivered = 'TRUE'
+--and bbb.LeadTypeCode in ('WHALF', 'WHALFRKT', 'WHLAFRKTCHATCTL', 'WHLAFCHATCTRL', 'WHALFCALC')
+group by
+sms.loannumber
+
+
+-------------------------------------------------------------
+-------------------------------------------------------------
+drop table if exists #final
+select
+b.jacketnumber
+--, b.OpportunityGroup
+, dd.MonthName as LeadCreateMonth
+, b.LeadTypeCode
+, case 
+        when (TCPA.isTCPACompliant = 0) then 'Non-TCPA Compliant'
+        when B.SMSConsentFlag = 0 THEN 'Non-CTIA Compliant'
+        when FirstCallAll.LoanNumber is not null then 'First Call Allocation'
+        when ((datepart(hour,l.CreateDt) < 11) and (baf.StartDateID = l.CreateDtID) and (datepart(hour,baf.StartDateTime) < 11)) then 'Created/Allocated before 11am'
+        when (l.State in ('AK','HI')) then 'AK/HI'
+        when (mkt.CreationTypeName = 'Lead Buy') then 'Lead Buy'
+        when (lb.SubBusinessChannel = 'Home Loan Benefit Partner') then 'HLBP'
+        when (lb.BusinessChannel in ( 'Rocket Pro Originate'
+                                    , 'Rocket Pro Real Estate'
+                                    , 'Rocket Pro TPO'
+                                    , 'Rocket Pro Unknown'
+                                    , 'Partnership'
+                                    , 'Referral'
+                                    )) then 'Non-Core'
+        when (lb.BusinessChannel = 'Retention') then 'Retention'             
+        when (datepart(hour,l.CreateDt) between 20 and 24) then 'Lead Create between 8pm and 12am'
+        else 'Eligible for SMS'
+        end as 'SMS Eligibility'
+
+into #final
+from #base b
+--inner join #textbase t on t.jacketnumber = b.JacketNumber
+left join qlods.dbo.lola l on l.JacketNumber = b.JacketNumber
+left join EDW.dimensions.loanidentifierdim LD ON LD.LoanNumber = b.jacketnumber
+left join integrate.loanorigination.loanbusinesschannelclassification LB ON LD.Loanidentifierdimsk = LB.LoanIdentifierDimSK 
+left join EDW.Marketing.vwRocket_Traditional_Winner mkt on mkt.leadid = LD.LoannumberID
+left join qlods.dbo.webcodedim ltc on ltc.webcodeid = l.webreferrerid
+left join biloan.dbo.bankerallocationfact BAF on baf.loannumber = b.jacketnumber
+    and baf.allocationsequence = 1
+LEFT join src.Person.Phone tcpa on tcpa.PhoneNumber = b.ClientCellPhone
+INNER JOIN qlods.dbo.datedim dd on dd.DateID = l.CreateDtID
+
+
+outer apply(
+            select
+            fd.LoanNumber
+            from reporting.mb.calleventrollup_bld FD
+            inner join #base bb on bb.jacketnumber = fd.LoanNumber
+            where 1=1
+            and fd.LoanNumber = b.JacketNumber
+            and fd.DialCount = 1
+            and fd.TransferCompleteDateTime is not null
+            )FirstCallAll
+
+--where ltc.WebCode in ('WHALF', 'WHALFRKT', 'WHLAFRKTCHATCTL', 'WHLAFCHATCTRL', 'WHALFCALC')
+
+
+Select 
+--LeadCreateMonth
+LeadTypeCode
+, sum(case when [SMS Eligibility] = 'Non-TCPA Compliant' then 1 else 0 end) as 'Non-TCPA Compliant'
+, sum(case when [SMS Eligibility] = 'Non-CTIA Compliant' then 1 else 0 end) as 'Non-CTIA Compliant'
+, sum(case when [SMS Eligibility] = 'First Call Allocation' then 1 else 0 end) as 'First Call Allocation'
+, sum(case when [SMS Eligibility] = 'Created/Allocated before 11am' then 1 else 0 end) as 'Created/Allocated before 11am'
+, sum(case when [SMS Eligibility] = 'AK/HI' then 1 else 0 end) as 'AK/HI'
+, sum(case when [SMS Eligibility] = 'Lead Buy' then 1 else 0 end) as 'Lead Buy'
+, sum(case when [SMS Eligibility] = 'HLBP' then 1 else 0 end) as 'HLBP'
+, sum(case when [SMS Eligibility] = 'Non-Core' then 1 else 0 end) as 'Non-Core'
+, sum(case when [SMS Eligibility] = 'Retention' then 1 else 0 end) as 'Retention'
+, sum(case when [SMS Eligibility] = 'Lead Create between 8pm and 12am' then 1 else 0 end) as 'Lead Create between 8pm and 12am'
+, sum(case when [SMS Eligibility] = 'Eligible for SMS' then 1 else 0 end) as 'Eligible for SMS'
+
+from BiSandboxWrite.dbo.NB_SMSWaterfallv2
+--where LeadTypeCode in ('WHALF', 'WHALFRKT', 'WHLAFRKTCHATCTL', 'WHLAFCHATCTRL', 'WHALFCALC')
+group by 
+--LeadCreateMonth,
+ LeadTypeCode
+ 
+
+
+select
+leadtypecode,
+count(JacketNumber) 
+
+from BiSandboxWrite.dbo.NB_SMSWaterfallv2
+where 1=1
+ and [SMS Eligibility] = 'Eligible for SMS'
+--and LeadTypeCode in ('WHALF', 'WHALFRKT', 'WHLAFRKTCHATCTL', 'WHLAFCHATCTRL', 'WHALFCALC')
+
+group by LeadTypeCode
+
+
+
+
+
+ select sum(case when [SMS Eligibility] = 'Eligible for SMS' then 1 else 0 end) as 'Eligible for SMS' from BiSandboxWrite.dbo.NB_SMSWaterfallv2
+
+
+ 
+
+
+
+
+Select 
+OpportunityGroup
+, count(jacketnumber) as total_Leads
+, sum(case when [SMS Eligibility] = 'Eligible for SMS' then 1 else 0 end) as 'Eligible for SMS'
+, cast(sum(case when [SMS Eligibility] = 'Eligible for SMS' then 1 else 0 end) as decimal(10,2))/ cast(nullif(count(jacketnumber) ,0)as decimal(10,2)) as '% Eligible for SMS'
+
+from #final
+--where LeadTypeCode like '%whalf%'
+
+
+
+group by 
+OpportunityGroup
