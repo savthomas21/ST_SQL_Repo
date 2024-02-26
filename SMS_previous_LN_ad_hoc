@@ -1,0 +1,156 @@
+
+
+Drop table if exists #textbase
+Select 
+    SC.LoanNumber
+    , cast(SC.loannumber as bigint) as jacketnumber
+    , dateadd(hour,-5,messagesenttimestamp) as LeadSubmittedDate
+    , cast(dateadd(hour,-5,messagesenttimestamp) as date) as LeadSubmittedDateDate
+    , isnull(baf.StartDateTime, '2099-12-31') as AllocationDate
+    , CASE WHEN (BAF.Allocationsequence = 1) THEN 1 ELSE 0 END as Allocated
+	, l.BorrowerGCID as GCID
+	, l.CreateDt
+
+
+into #textbase 
+FROM src.salesforce.opportunitieschangedevent SC WITH (NOLOCK)
+        left join EDW.dimensions.loanidentifierdim LDD ON LDD.LoanNumber = sc.LoanNumber
+        LEFT JOIN biloan.dbo.BankerAllocationFact baf on baf.loannumber = LDD.LoanNumberID and baf.allocationsequence = 1
+        left join qlods..datedim dd on dd.DateID = convert(varchar(8), cast(dateadd(hour,-5,messagesenttimestamp) as date), 112)
+		LEFT JOIN SRCSubmissionEngine.Dbo.LeadSubmission LS ON LS.Loannumber = sc.LoanNumber
+LEFT JOIN [SRCSubmissionEngine].[dbo].[Leads] Les ON Les.Leadid = ls.Leadid
+LEFT JOIN SRCSubmissionEngine.dbo.LeadProcessing LP ON LP.LeadId = LeS.LeadId and lp.LeadProcessingId = ls.LeadProcessingID
+     left join qlods.dbo.lola l on l.JacketNumber = sc.LoanNumber
+
+
+where 1=1
+    and eventreason = 'Lead Submitted' 
+	and lp.LeadTypeCode in ('WHALF', 'WHALFRKT', 'WHLAFRKTCHATCTL', 'WHLAFCHATCTRL', 'WHALFCALC')
+   -- and opportunitygroup in ('Core Refinance Web Leads Text', 'Core Refinance Web Leads Text Control')
+  -- and cast(dateadd(hour,-5,messagesenttimestamp) as date) between '2023-12-13' and '2024-02-13' 
+
+      and cast(dateadd(hour,-5,messagesenttimestamp) as date) between '2024-02-06' and '2024-02-13' 
+
+    and cast (isnull(baf.StartDateTime, '2099-12-31') as date) != cast(dateadd(hour,-5,messagesenttimestamp) as date)   ---excludes day 0 allocations
+  --  and cast(dateadd(hour,-5,messagesenttimestamp) as date) < dateadd(day, -1 , cast(getdate() as date))
+
+	group by 
+	 SC.LoanNumber
+    , cast(SC.loannumber as bigint) 
+    , dateadd(hour,-5,messagesenttimestamp) 
+    , cast(dateadd(hour,-5,messagesenttimestamp) as date) 
+    , isnull(baf.StartDateTime, '2099-12-31') 
+    , CASE WHEN (BAF.Allocationsequence = 1) THEN 1 ELSE 0 END
+		, l.BorrowerGCID
+		, l.CreateDt
+
+Select 
+count(loannumber) as leads
+, sum(allocated) as allocations
+
+from #textbase
+---------------------------------------------------
+---------------------------------------------------
+drop table if exists #previousleads
+select
+t.GCID
+, l.JacketNumber
+, l.CreateDt
+into #previousleads
+from #textbase t
+left join qlods.dbo.lola l on l.BorrowerGCID = t.GCID
+
+
+
+---------------------------------------------------
+---------------------------------------------------
+drop table if exists #final
+Select 
+t.*
+, count(PrevLead.JacketNumber) as TotalPreviousLeads
+--case when LN_count.LN_Count > 0 then 1 else 0 end as previousLNInd
+
+into #final
+From #textbase t
+
+outer apply(
+            select top 1
+            d.JacketNumber
+            from #previousleads d
+            where 1=1
+            and d.GCID = t.GCID
+            and d.CreateDt < t.CreateDt
+            and d.JacketNumber <> t.jacketnumber
+            order by d.CreateDt desc
+            )PrevLead
+
+group by
+t.LoanNumber
+, t.jacketnumber
+, t.LeadSubmittedDate
+, t.LeadSubmittedDateDate
+, t.AllocationDate
+, t.Allocated
+, t.GCID
+, t.CreateDt
+
+
+
+
+
+
+
+
+
+
+Select 
+count(loannumber) as leads
+, sum(allocated) as allocations
+
+from #final
+where TotalPreviousLeads > 0
+
+
+
+select top 100 * from #final where TotalPreviousLeads is null
+
+
+
+
+select top 100 * from #textbase where gcid = '195076916'
+
+select top 100 * from #LNCount where gcid = '195076916'
+
+
+
+select top 100 * from qlods.dbo.lola where borrowergcid = '195397496' order by createdt asc
+
+
+select top 100 * from #textbase
+
+
+Select top 100 * from #LNCount where gcid = '195397496'
+
+Select * from #final where gcid = '195397496'
+
+
+196013768
+161468137
+159811424
+195076916
+
+select createdt, Stat9595Dt  from  qlods.dbo.lola where borrowergcid = '180926467'
+
+
+
+select *  from  qlods.dbo.lola where borrowergcid = '195397496'
+
+
+
+
+Select count(gcid), count(distinct gcid) from #final 
+
+Select count(loannumber), count(distinct loannumber) from #final 
+
+Select
+gcid, count(*) from #final group by gcid having count(*) > 1
