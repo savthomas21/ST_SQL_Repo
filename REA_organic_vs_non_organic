@@ -1,0 +1,64 @@
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+ 
+drop table if exists #base
+ 
+SELECT 
+l.[Loan Number], 
+lid.LoanIdentifierDimSK,
+l.[Closing DateTime Last],
+[SubmittedDate] =CASE WHEN tif.StatusID = 11 THEN tif.StatusDateTime ELSE NULL END  ,
+RowNum = ROW_NUMBER() OVER(PARTITION BY l.[Loan Number] ORDER BY tif.StatusDateTime ASC),
+ 
+CASE WHEN l.[Closing DateTime Last] IS NOT NULL THEN 1 ELSE 0 END AS 'ClosingFlg'
+ , case when ltc.[Lead Type Code] in ('GENSOCPRFP', 'GENSOCPRFR', 'REFERROCPRFP', 'REFERSOCPRFR', 'BNKREFERSOCPRFP', 'BNKERREFERSOCPRFR') then 1 else 0 end as Non_REAOrganicFlag
+ , case when ltc.[Lead Type Code] in ( 'RBSGENSOCPRFP', 'RBSREFERSOCPRFP') then 1 else 0 end as REAReferredFlag
+
+INTO #Base
+ 
+FROM [Semantic].[Loan].[vwLoanMilestoneHeader]								AS L  
+	INNER JOIN Integrate.LoanOrigination.LoanBusinessChannelClassification	AS lbcc WITH (NOLOCK)	ON lbcc.LoanIdentifierDimSK = L.LoanIdentifierDimSK		AND lbcc.businesschannel = 'Core Purchase'
+	INNER JOIN edw.Dimensions.LoanIdentifierDim								AS LID WITH (NOLOCK)	ON LID.LoanNumber = L.[Loan Number]						AND lid.IsCurrentRecordInd = 1  
+	LEFT JOIN QLODS.dbo.LKWDTrackingItemFact								AS tif WITH (NOLOCK)	ON tif.LoanNumber = L.[Loan Number]						AND tif.TrackingItemID in (7756,7592) AND StatusSeqNum = 1 AND StatusID = 11 --statusId = sent to UWR/submitted for an upgrade, trackingitemid = which letter
+ 
+    LEFT JOIN Integrate.LoanOrigination.vwDirectToConsumerBusinessChannelHeader ltc ON ltc.LoanIdentifierDimSK = lid.LoanIdentifierDimSK  --
+	AND ltc.CurrentIndicator = 1
+
+WHERE 1=1
+	AND [Allocated DateTime First] between '2023-04-01' AND '2023-11-01'
+	AND [Allocated DateTime First] IS NOT NULL
+	AND l.[Loan Number] IS NOT NULL
+
+
+
+
+DROP TABLE IF EXISTS #FINAL
+SELECT *
+INTO #FINAL
+FROM #BASE b
+	where RowNum = 1
+
+ 
+ 
+SELECT 
+--dd.MonthBeginDate
+--,dd.MonthAndYearName
+Non_REAOrganicFlag
+, REAReferredFlag
+,SUM(f.ClosingFlg) as 'Closings'
+,COUNT(*) as total_allocations
+,SUM(f.ClosingFlg) * 1.00 / COUNT(*) as Allocate_to_Close
+FROM #FINAL f
+--LEFT JOIN edw.Dimensions.DateDim dd ON dd.DayDate = CONVERT(DATE,f.SubmittedDate)
+ 
+--WHERE f.AgentbyUpgradeFlg = 1
+ 
+--GROUP BY dd.MonthAndYearName, dd.MonthBeginDate, OrganicFlag
+GROUP BY 
+Non_REAOrganicFlag
+, REAReferredFlag
+ 
+ORDER BY 
+Non_REAOrganicFlag
+, REAReferredFlag
+
