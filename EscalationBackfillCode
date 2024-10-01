@@ -1,0 +1,31 @@
+With base as (
+Select
+value_thekeyopportunityid as TheKeyOpportunityId
+, value_loannumber as LoanNumber
+, date_format(date_parse(value_eventtimestamp, '%Y-%m-%dT%H:%i:%s.%fZ'), '%Y/%m/%d %H:%i:%s') AS EventTimeStamp
+, headers_type as type
+, value_reallocationrule_id as ReallocationRule_Id
+, value_reallocationrule_name as ReallocationRule_Name
+, value_sourceopportunitygroup_id as SourceOpportunityGroup_Id
+, value_sourceopportunitygroup_name as SourceOpportunityGroup_Name
+, value_targetopportunitygroup_id as TargetOpportunityGroup_Id
+, value_targetopportunitygroup_name as TargetOpportunityGroup_Name
+, date_format(date_parse(value_eventtimestamp, '%Y-%m-%dT%H:%i:%s.%fZ'), '%Y-%m-%d') as formatteddateshort
+from rkt_dp_build_analytical_access.np_thekeyopportunity_922)
+select
+TheKeyOpportunityId
+, LoanNumber
+, EventTimeStamp
+, type
+, ReallocationRule_Id
+, ReallocationRule_Name
+, SourceOpportunityGroup_Id
+, SourceOpportunityGroup_Name
+, TargetOpportunityGroup_Id
+, TargetOpportunityGroup_Name
+from base
+where
+formatteddateshort > '2024-08-20'
+and type != 'channel-assigned'
+
+order by EventTimeStamp asc
