@@ -1,0 +1,50 @@
+
+
+
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+ 
+
+Declare @Startdate Date = Getdate() - 30
+Declare @Enddate Date = Getdate() - 1
+Declare @Startdateid INT = Convert(Varchar,@Startdate,112)
+Declare @Enddateid INT = Convert(Varchar,@Enddate,112)
+
+
+
+--Pulling in base population of all leads created between start/end date
+DROP TABLE IF EXISTS #leads
+Select
+LID.Loannumber
+, LID.LoanNumberID
+, lm.EventDateDimId as LeadCreateDateID
+, cast(lm.EventDateTime as date) as LeadCreateDate
+, datepart(hour, lm.eventdatetime) as leadcreatehour
+, case when (l.LoanPurposeID = 7) then 'Refinance' else 'Purchase' end as LoanPurpose
+, ld.WebCode
+
+ 
+INTO #leads
+From EDW.Loan.LoanMajorMilestoneFact LM WITH (NOLOCK)
+INNER JOIN EDW.dimensions.loanmilestonedim lmd WITH (NOLOCK) on lmd.loanmilestonesk = lm.loanmilestonesk 
+LEFT JOIN EDW.Dimensions.LoanIdentifierDim LID WITH (NOLOCK) ON LID.LoanIdentifierDimSK = LM.LoanIdentifierDimSK 
+    and LID.IsCurrentRecordInd = 1
+left join qlods.dbo.lola l WITH (NOLOCK) on l.JacketNumber = lid.LoanNumber
+inner join qlods.dbo.webcodedim ld on ld.webcodeid = l.WebReferrerID
+
+
+Where 1=1
+and lm.EventDateDimId between @startdateid and @Enddateid
+and lm.IsCurrentRecordInd = 1
+and lid.LoanNumber is not null
+and lmd.GroupID in (
+                      12 --net lead
+                    )
+and ld.WebCode in ('LPADHEL' , 'LPADHELNM')
+
+
+Select webcode, leadcreatehour, count(*) from #leads group by webcode, leadcreatehour
+
+
+
+select * from #leads
